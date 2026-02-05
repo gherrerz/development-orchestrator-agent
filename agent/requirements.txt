@@ -1,0 +1,8 @@
+openai>=1.40.0
+pinecone>=5.0.0
+PyGithub>=2.3.0
+jsonschema>=4.22.0
+pydantic>=2.8.0
+python-dotenv>=1.0.1
+unidiff>=0.7.5
+tiktoken>=0.7.0

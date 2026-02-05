@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TestReport",
+  "type": "object",
+  "required": ["passed", "summary", "acceptance_criteria_status"],
+  "properties": {
+    "passed": { "type": "boolean" },
+    "summary": { "type": "string" },
+    "acceptance_criteria_status": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["criterion", "met", "evidence"],
+        "properties": {
+          "criterion": { "type": "string" },
+          "met": { "type": "boolean" },
+          "evidence": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "recommended_patch": { "$ref": "patch.schema.json" }
+  },
+  "additionalProperties": false
+}

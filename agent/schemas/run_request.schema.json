@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunRequest",
+  "type": "object",
+  "required": ["stack", "language", "user_story"],
+  "properties": {
+    "stack": { "type": "string", "minLength": 1 },
+    "language": { "type": "string", "minLength": 1 },
+    "user_story": { "type": "string", "minLength": 10 },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "test_command": { "type": "string", "default": "pytest -q" },
+    "max_iterations": { "type": "integer", "minimum": 1, "maximum": 5, "default": 2 }
+  },
+  "additionalProperties": false
+}

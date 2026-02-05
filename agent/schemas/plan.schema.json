@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Plan",
+  "type": "object",
+  "required": ["summary", "tasks", "files_to_touch", "test_strategy"],
+  "properties": {
+    "summary": { "type": "string" },
+    "assumptions": { "type": "array", "items": { "type": "string" }, "default": [] },
+    "risks": { "type": "array", "items": { "type": "string" }, "default": [] },
+    "files_to_touch": { "type": "array", "items": { "type": "string" } },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "description"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "description": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "test_strategy": { "type": "string" }
+  },
+  "additionalProperties": false
+}
