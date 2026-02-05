@@ -43,7 +43,7 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_ID: ${{ github.event.comment.id }}
         run: |
-          python agent/orchestrator.py
+          python -m agent.orchestrator
 
       - name: Comment back to Issue
         if: always()
