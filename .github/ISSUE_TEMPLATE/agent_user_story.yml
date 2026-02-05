@@ -1,0 +1,124 @@
+name: "🤖 Agent: Historia de Usuario"
+description: "Define una historia de usuario para que el Agent Orchestrator la implemente vía GitHub Actions."
+title: "[AGENT] "
+labels:
+  - "agent:request"
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Cómo usar
+        1) Completa esta plantilla y crea el Issue.
+        2) Comenta en el Issue: **/agent run** + JSON (ver al final).
+        3) El workflow creará una rama y un PR con los cambios + evidencia de tests.
+
+  - type: input
+    id: stack
+    attributes:
+      label: Stack objetivo
+      description: "Ej: python-fastapi-postgres, python-django, python-cli, python-lib, etc."
+      placeholder: "python-fastapi-postgres"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: language
+    attributes:
+      label: Lenguaje
+      options:
+        - python
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: user_story
+    attributes:
+      label: Historia de usuario
+      description: "Formato recomendado: Como <rol>, quiero <capacidad>, para <beneficio>."
+      placeholder: "Como usuario, quiero autenticarme con JWT para acceder a endpoints protegidos."
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Criterios de aceptación
+      description: "Un criterio por línea."
+      placeholder: |
+        Login retorna access token JWT
+        Endpoint /me requiere token válido
+        Tests unitarios para auth
+    validations:
+      required: false
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Restricciones / Consideraciones
+      description: "Un ítem por línea (ej: estándares, compatibilidad, dependencias, performance, seguridad)."
+      placeholder: |
+        Mantener compatibilidad con Python 3.11
+        No agregar dependencias pesadas
+        Seguir estructura actual del repo
+    validations:
+      required: false
+
+  - type: input
+    id: test_command
+    attributes:
+      label: Comando de tests
+      description: "Se ejecuta en GitHub Actions antes de crear el PR."
+      placeholder: "pytest -q"
+      value: "pytest -q"
+    validations:
+      required: true
+
+  - type: input
+    id: max_iterations
+    attributes:
+      label: Máximo de iteraciones
+      description: "Cuántas vueltas de Implement/Test permite el orquestador."
+      placeholder: "2"
+      value: "2"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: pr_behavior
+    attributes:
+      label: Comportamiento de entrega
+      description: "Recomendado: PR siempre (evita romper main)."
+      options:
+        - label: "Crear Pull Request (recomendado)"
+          required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        ## Comando para ejecutar el agente
+
+        Copia/pega este bloque como comentario en el Issue, reemplazando los valores si es necesario.
+        > Tip: Puedes pegarlo tal cual y editarlo, o completarlo con lo escrito arriba.
+
+        **Comentario:**
+        ```text
+        /agent run {
+          "stack": "<STACK>",
+          "language": "python",
+          "user_story": "<HISTORIA_DE_USUARIO>",
+          "acceptance_criteria": [
+            "<CRITERIO_1>",
+            "<CRITERIO_2>"
+          ],
+          "constraints": [
+            "<RESTRICCION_1>",
+            "<RESTRICCION_2>"
+          ],
+          "test_command": "pytest -q",
+          "max_iterations": 2
+        }
+        ```
