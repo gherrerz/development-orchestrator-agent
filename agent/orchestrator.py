@@ -158,38 +158,39 @@ def main():
         temperature=0.2
     )
     # Normaliza errores comunes (plan wrapper, steps, etc.)
-plan = normalize_plan(plan)
-
-try:
-    safe_validate(plan, PLAN_SCHEMA, "plan.schema.json")
-
-except ValueError as e:
-    # 🔁 REPAIR STEP: pedir explícitamente al LLM que repare el JSON
-    repair_user = json.dumps(
-        {
-            "error": str(e),
-            "invalid_plan": plan,
-            "required_schema": PLAN_SCHEMA,
-            "instructions": (
-                "Repara el JSON para que cumpla EXACTAMENTE el schema. "
-                "No agregues wrappers como 'plan'. "
-                "No incluyas markdown. "
-                "Devuelve solo el objeto JSON válido."
-            )
-        },
-        ensure_ascii=False
-    )
-
-    plan = chat_json(
-        system=orchestrator_sys
-        + "\nEres un validador estricto de JSON Schema. Repara la estructura.",
-        user=repair_user,
-        schema_name="plan.schema.json",
-        temperature=0.0
-    )
-
     plan = normalize_plan(plan)
-    safe_validate(plan, PLAN_SCHEMA, "plan.schema.json")
+
+    try:
+        safe_validate(plan, PLAN_SCHEMA, "plan.schema.json")
+
+    except ValueError as e:
+        # 🔁 REPAIR STEP: pedir explícitamente al LLM que repare el JSON
+        repair_user = json.dumps(
+            {
+                "error": str(e),
+                "invalid_plan": plan,
+                "required_schema": PLAN_SCHEMA,
+                "instructions": (
+                    "Repara el JSON para que cumpla EXACTAMENTE el schema. "
+                    "No agregues wrappers como 'plan'. "
+                    "No incluyas markdown. "
+                    "Devuelve solo el objeto JSON válido."
+                )
+            },
+            ensure_ascii=False
+        )
+
+        repaired = chat_json(
+            system=orchestrator_sys
+            + "\nEres un formateador estricto. Repara el JSON al schema exacto.",
+            user=repair_user,
+            schema_name="plan.schema.json",
+            temperature=0.0
+        )
+
+        repaired = normalize_plan(repaired)
+        safe_validate(repaired, PLAN_SCHEMA, "plan.schema.json")
+        plan = repaired
 
     # Persist plan to memory
     upsert_texts(repo, issue_number, [{
