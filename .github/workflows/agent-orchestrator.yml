@@ -39,7 +39,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # Siempre asegurar pytest disponible
-          pip install pytest
+          # deps mínimas para este stack
+          pip install fastapi "uvicorn[standard]" pydantic pytest httpx
 
           # Instalar dependencias del repo si existen
           if [ -f requirements.txt ]; then
@@ -68,7 +69,7 @@ jobs:
             PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
             PINECONE_INDEX_HOST: ${{ secrets.PINECONE_INDEX_HOST }}
             PINECONE_NAMESPACE_PREFIX: ${{ secrets.PINECONE_NAMESPACE_PREFIX }}
-            GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            GH_TOKEN: ${{ secrets.GH_PAT }}
             REPO: ${{ github.repository }}
             ISSUE_NUMBER: ${{ github.event.issue.number }}
             COMMENT_BODY: ${{ github.event.comment.body }}
