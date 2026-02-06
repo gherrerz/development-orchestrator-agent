@@ -7,11 +7,14 @@ from pinecone import Pinecone
 from openai import OpenAI
 
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+#EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "").strip()
 
 def _openai() -> OpenAI:
     return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 def embed(texts: List[str]) -> List[List[float]]:
+    if not EMBED_MODEL:
+        raise RuntimeError("OPENAI_EMBED_MODEL no está definido. No se puede hacer embedding.")
     resp = _openai().embeddings.create(model=EMBED_MODEL, input=texts)
     return [d.embedding for d in resp.data]
 
