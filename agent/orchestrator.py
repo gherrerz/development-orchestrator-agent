@@ -48,6 +48,55 @@ def safe_validate(obj: Dict[str, Any], schema: Dict[str, Any], schema_name: str)
     except ValidationError as e:
         raise ValueError(f"JSON inválido para {schema_name}: {e.message}")
 
+def normalize_plan(plan_obj: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Fix common model deviations:
+    - unwrap {"plan": {...}}
+    - convert {"steps": [...]} to schema fields
+    """
+    if isinstance(plan_obj, dict) and "plan" in plan_obj and isinstance(plan_obj["plan"], dict):
+        plan_obj = plan_obj["plan"]
+
+    # If model returned "steps" with richer fields, map them.
+    if "steps" in plan_obj and isinstance(plan_obj["steps"], list):
+        steps = plan_obj["steps"]
+
+        # Build tasks from steps
+        tasks = []
+        files_to_touch = set()
+        test_strategy = plan_obj.get("test_strategy") or ""
+
+        for idx, s in enumerate(steps, start=1):
+            desc = s.get("step") or s.get("description") or f"Step {idx}"
+            tasks.append({
+                "id": f"S{idx}",
+                "title": (desc[:60] + "...") if len(desc) > 60 else desc,
+                "description": desc
+            })
+
+            for f in (s.get("files_to_modify") or []):
+                files_to_touch.add(str(f))
+            for f in (s.get("files_to_create") or []):
+                files_to_touch.add(str(f))
+
+            if not test_strategy and s.get("tests_strategy"):
+                test_strategy = s["tests_strategy"]
+
+            # carry over risks/assumptions if present inside step
+            if "risks" in s and "risks" not in plan_obj:
+                plan_obj["risks"] = s.get("risks", [])
+            if "assumptions" in s and "assumptions" not in plan_obj:
+                plan_obj["assumptions"] = s.get("assumptions", [])
+
+        plan_obj["tasks"] = plan_obj.get("tasks") or tasks
+        plan_obj["files_to_touch"] = plan_obj.get("files_to_touch") or sorted(files_to_touch)
+        plan_obj["test_strategy"] = plan_obj.get("test_strategy") or test_strategy or "Agregar/ajustar tests y ejecutar el comando de tests indicado."
+
+        # Remove non-schema field
+        plan_obj.pop("steps", None)
+
+    return plan_obj
+
 def run_cmd(cmd: str) -> Tuple[int, str]:
     p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
     out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
@@ -108,6 +157,38 @@ def main():
         schema_name="plan.schema.json",
         temperature=0.2
     )
+    # Normaliza errores comunes (plan wrapper, steps, etc.)
+plan = normalize_plan(plan)
+
+try:
+    safe_validate(plan, PLAN_SCHEMA, "plan.schema.json")
+
+except ValueError as e:
+    # 🔁 REPAIR STEP: pedir explícitamente al LLM que repare el JSON
+    repair_user = json.dumps(
+        {
+            "error": str(e),
+            "invalid_plan": plan,
+            "required_schema": PLAN_SCHEMA,
+            "instructions": (
+                "Repara el JSON para que cumpla EXACTAMENTE el schema. "
+                "No agregues wrappers como 'plan'. "
+                "No incluyas markdown. "
+                "Devuelve solo el objeto JSON válido."
+            )
+        },
+        ensure_ascii=False
+    )
+
+    plan = chat_json(
+        system=orchestrator_sys
+        + "\nEres un validador estricto de JSON Schema. Repara la estructura.",
+        user=repair_user,
+        schema_name="plan.schema.json",
+        temperature=0.0
+    )
+
+    plan = normalize_plan(plan)
     safe_validate(plan, PLAN_SCHEMA, "plan.schema.json")
 
     # Persist plan to memory
