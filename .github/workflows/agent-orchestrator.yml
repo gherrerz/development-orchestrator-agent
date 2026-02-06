@@ -30,6 +30,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r agent/requirements.txt
 
+      - name: Install project deps (best-effort)
+        run: |
+          python -m pip install --upgrade pip
+          # Siempre asegurar pytest disponible
+          pip install pytest
+
+          # Instalar dependencias del repo si existen
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+          if [ -f pyproject.toml ]; then
+            # Best-effort: si usa poetry/uv no lo asumimos; intentamos extras comunes
+            pip install .
+          fi
+
       - name: Debug patch_apply.py (CI truth)
         run: |
           echo "=== git rev-parse HEAD ==="

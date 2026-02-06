@@ -162,6 +162,49 @@ def normalize_patch(patch_obj: Dict[str, Any]) -> Dict[str, Any]:
 
     return patch_obj
 
+def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[str, Any]:
+    # unwrap common wrapper
+    if isinstance(tr, dict) and "test_report" in tr and isinstance(tr["test_report"], dict):
+        tr = tr["test_report"]
+
+    # already correct
+    if "passed" in tr and "summary" in tr and "acceptance_criteria_status" in tr:
+        return tr
+
+    # map common alternative keys
+    passed = None
+    if "tests_passed" in tr:
+        passed = bool(tr["tests_passed"])
+    elif "passed" in tr:
+        passed = bool(tr["passed"])
+    else:
+        passed = False
+
+    summary = tr.get("summary") or tr.get("test_summary") or "Resultado de pruebas no especificado."
+
+    ac_list = []
+    criteria = run_req.get("acceptance_criteria") or []
+    if criteria:
+        # if model provided criteria_verification text, use as evidence
+        evidence_base = tr.get("criteria_verification") or tr.get("summary") or tr.get("test_summary") or ""
+        for c in criteria:
+            ac_list.append({"criterion": c, "met": passed, "evidence": evidence_base[:400]})
+    else:
+        # no acceptance criteria provided
+        ac_list = [{"criterion": "N/A", "met": passed, "evidence": summary[:400]}]
+
+    out = {
+        "passed": passed,
+        "summary": summary,
+        "acceptance_criteria_status": ac_list
+    }
+
+    # carry recommended_patch if present (and it may need normalize_patch elsewhere)
+    if "recommended_patch" in tr:
+        out["recommended_patch"] = tr["recommended_patch"]
+
+    return out
+
 def run_cmd(cmd: str) -> Tuple[int, str]:
     p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
     out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
@@ -332,6 +375,17 @@ def main():
 
         # Run tests
         code, out = run_cmd(test_cmd)
+        if "pytest: not found" in out or "/bin/sh: 1: pytest: not found" in out:
+            # reporta en formato schema y salta test agent
+            test_report = {
+                "passed": False,
+                "summary": "No se pudieron ejecutar tests: pytest no está instalado en el runner. Instala pytest o ajusta test_command.",
+                "acceptance_criteria_status": [
+                    {"criterion": c, "met": False, "evidence": "pytest no disponible"} for c in (run_req.get("acceptance_criteria") or ["Incluir test unitarios"])
+                ]
+            }
+            # y opcionalmente: break o continuar a repair
+
         last_test_output = out
 
         iteration_notes.append(f"Iteración {i}: test exit={code}")
@@ -369,7 +423,35 @@ def main():
             schema_name="test_report.schema.json",
             temperature=0.2
         )
-        safe_validate(test_report, TEST_SCHEMA, "test_report.schema.json")
+
+        test_report = normalize_test_report(test_report, run_req)
+
+        try:
+            safe_validate(test_report, TEST_SCHEMA, "test_report.schema.json")
+        except ValueError as e:
+            repair_user = json.dumps(
+                {
+                    "error": str(e),
+                    "invalid_test_report": test_report,
+                    "required_schema": TEST_SCHEMA,
+                    "instructions": (
+                        "Devuelve SOLO JSON válido que cumpla EXACTAMENTE test_report.schema.json. "
+                        "Debe incluir 'passed' (boolean), 'summary' (string), y 'acceptance_criteria_status' (array). "
+                        "Sin markdown."
+                    )
+                },
+                ensure_ascii=False
+            )
+            repaired = chat_json(
+                system=orchestrator_sys + "\nEres un formateador estricto. Repara el test report al schema exacto.",
+                user=repair_user,
+                schema_name="test_report.schema.json",
+                temperature=0.0
+            )
+            repaired = normalize_test_report(repaired, run_req)
+            safe_validate(repaired, TEST_SCHEMA, "test_report.schema.json")
+            test_report = repaired
+
 
         if test_report.get("recommended_patch"):
             # apply recommended patch and re-run tests once within same iteration
