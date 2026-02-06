@@ -97,6 +97,71 @@ def normalize_plan(plan_obj: Dict[str, Any]) -> Dict[str, Any]:
 
     return plan_obj
 
+def normalize_patch(patch_obj: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Supports two model outputs:
+    1) Expected schema: {"patches":[{"path","diff"}], "notes":[...]}
+    2) Alternate: {"files": {"path": {"content": "..."} , ...}, "notes":[...]}
+       -> convert to unified diffs that 'git apply' can consume.
+    """
+    # already correct
+    if isinstance(patch_obj, dict) and "patches" in patch_obj:
+        if "notes" not in patch_obj:
+            patch_obj["notes"] = []
+        return patch_obj
+
+    # unwrap common wrapper
+    if isinstance(patch_obj, dict) and "patch" in patch_obj and isinstance(patch_obj["patch"], dict):
+        patch_obj = patch_obj["patch"]
+
+    # alternate files format
+    if isinstance(patch_obj, dict) and "files" in patch_obj and isinstance(patch_obj["files"], dict):
+        files = patch_obj["files"]
+        notes = patch_obj.get("notes", [])
+
+        patches = []
+        for path, spec in files.items():
+            # support {"content": "..."} or direct string
+            new_content = spec.get("content") if isinstance(spec, dict) else str(spec)
+
+            # read old content if exists
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    old_content = f.read()
+                existed = True
+            except FileNotFoundError:
+                old_content = ""
+                existed = False
+
+            # build unified diff with python difflib
+            import difflib
+            old_lines = old_content.splitlines(keepends=True)
+            new_lines = new_content.splitlines(keepends=True)
+
+            a_path = f"a/{path}"
+            b_path = f"b/{path}"
+            fromfile = a_path if existed else "/dev/null"
+            tofile = b_path
+
+            diff = "".join(difflib.unified_diff(
+                old_lines,
+                new_lines,
+                fromfile=fromfile,
+                tofile=tofile,
+                lineterm=""
+            ))
+
+            # difflib returns lines without trailing \n when lineterm="" → normalize
+            if diff and not diff.endswith("\n"):
+                diff += "\n"
+
+            # git apply requires the ---/+++ headers; difflib provides them
+            patches.append({"path": path, "diff": diff})
+
+        return {"patches": patches, "notes": notes if isinstance(notes, list) else []}
+
+    return patch_obj
+
 def run_cmd(cmd: str) -> Tuple[int, str]:
     p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
     out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
@@ -233,9 +298,36 @@ def main():
             schema_name="patch.schema.json",
             temperature=0.2
         )
-        safe_validate(patch_obj, PATCH_SCHEMA, "patch.schema.json")
+        patch_obj = normalize_patch(patch_obj)
 
-        # Apply patch
+        try:
+            safe_validate(patch_obj, PATCH_SCHEMA, "patch.schema.json")
+        except ValueError as e:
+            # (opcional) reparo automático: re-preguntar al LLM
+            repair_user = json.dumps(
+                {
+                    "error": str(e),
+                    "invalid_patch": patch_obj,
+                    "required_schema": PATCH_SCHEMA,
+                    "instructions": (
+                        "Devuelve SOLO JSON válido que cumpla EXACTAMENTE patch.schema.json. "
+                        "Debe existir 'patches' (lista) y 'notes' (lista). "
+                        "Cada patch debe incluir 'path' y 'diff' (unified diff con ---/+++). "
+                        "Sin markdown."
+                    )
+                },
+                ensure_ascii=False
+            )
+            patched = chat_json(
+                system=orchestrator_sys + "\nEres un formateador estricto. Repara el patch al schema exacto.",
+                user=repair_user,
+                schema_name="patch.schema.json",
+                temperature=0.0
+            )
+            patched = normalize_patch(patched)
+            safe_validate(patched, PATCH_SCHEMA, "patch.schema.json")
+            patch_obj = patched
+
         apply_patch_object(patch_obj)
 
         # Run tests
