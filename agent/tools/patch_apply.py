@@ -85,8 +85,37 @@ def apply_patch_object(patch_obj: Dict[str, Any]) -> None:
     for item in patch_obj.get("patches", []):
         diff_text = item.get("diff", "")
         if looks_like_valid_unified_diff(diff_text):
-            try_git_apply(diff_text)
+            try:
+                try_git_apply(diff_text)
+                continue
+            except Exception:
+                # Fallback a escritura por contenido cuando git apply falla
+                pass
+
+        # Fallback: write file content from '+' lines
+        path = item.get("path") or extract_target_path_from_headers(diff_text)
+        if not path:
+            raise RuntimeError(f"Patch inválido y sin path detectable. Diff:\n{diff_text[:500]}")
+
+        content = strip_diff_headers_to_content(diff_text)
+
+        # ✅ Caso especial: "archivo vacío" (el modelo lo escribe como texto)
+        if "(archivo vacío)" in diff_text or content.strip() == "(archivo vacío)":
+            write_file(path, "")
             continue
+
+        # ✅ Caso especial: hunk 0 líneas (crear archivo vacío)
+        if re.search(r"@@\s+-0,0\s+\+1,0\s+@@", diff_text):
+            write_file(path, "")
+            continue
+
+        if not content:
+            # si no hay contenido recuperable, igual crea vacío (mejor que fallar)
+            write_file(path, "")
+            continue
+
+        write_file(path, content)
+
 
         # Fallback: write file content from '+' lines
         path = item.get("path") or extract_target_path_from_headers(diff_text)
