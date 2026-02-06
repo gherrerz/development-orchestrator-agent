@@ -7,6 +7,7 @@ Devuelve EXACTAMENTE un objeto JSON raíz que cumpla patch.schema.json:
 
 - NO devuelvas "files" ni contenidos completos.
 - "diff" debe ser unified diff aplicable por git apply, incluyendo headers --- a/... y +++ b/...
+- Si no puedes generar unified diff válido, devuelve formato files con content.
 - Sin markdown.
 
 Rol: Implementation Agent.

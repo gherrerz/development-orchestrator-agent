@@ -21,7 +21,6 @@ def delete_file(path: str) -> None:
         pass
 
 def looks_like_valid_unified_diff(diff_text: str) -> bool:
-    # Minimal heuristics: must contain --- and +++ and at least one @@ hunk
     return ("--- " in diff_text) and ("+++ " in diff_text) and ("@@ " in diff_text)
 
 def try_git_apply(diff_text: str) -> None:
@@ -41,9 +40,6 @@ def try_git_apply(diff_text: str) -> None:
             pass
 
 def extract_target_path_from_headers(diff_text: str) -> str:
-    """
-    Extracts path from '+++ b/...' header when present.
-    """
     m = re.search(r"^\+\+\+\s+b/(.+)$", diff_text, re.MULTILINE)
     if m:
         return m.group(1).strip()
@@ -54,10 +50,6 @@ def extract_target_path_from_headers(diff_text: str) -> str:
     return ""
 
 def strip_diff_headers_to_content(diff_text: str) -> str:
-    """
-    If diff is not valid (no hunks), treat lines starting with '+' as file content,
-    and ignore header lines.
-    """
     lines = []
     for line in diff_text.splitlines():
         if line.startswith(("--- ", "+++ ", "diff --git", "index ", "new file mode", "deleted file mode")):
@@ -68,16 +60,10 @@ def strip_diff_headers_to_content(diff_text: str) -> str:
             lines.append(line[1:])
         elif line.startswith(" "):
             lines.append(line[1:])
-        # ignore '-' lines in this fallback
-    return "\n".join(lines).strip() + "\n"
+    return ("\n".join(lines).strip() + "\n") if lines else ""
 
 def apply_patch_object(patch_obj: Dict[str, Any]) -> None:
-    """
-    Supports:
-    - {"files": {path: {content, operation}}} -> write/delete directly
-    - {"patches": [{path,diff}], ...} -> try git apply; if invalid diff, fallback to write file.
-    """
-    # Apply files-first (most reliable)
+    # Prefer files format
     if "files" in patch_obj and isinstance(patch_obj["files"], dict):
         for path, spec in patch_obj["files"].items():
             op = "modify"
@@ -87,6 +73,7 @@ def apply_patch_object(patch_obj: Dict[str, Any]) -> None:
                 content = spec.get("content", "")
             else:
                 content = str(spec)
+
             norm_path = path[2:] if path.startswith("./") else path
             if op == "delete":
                 delete_file(norm_path)
@@ -94,9 +81,9 @@ def apply_patch_object(patch_obj: Dict[str, Any]) -> None:
                 write_file(norm_path, content)
         return
 
-    # Otherwise apply diffs with safe fallback
+    # Otherwise patches format
     for item in patch_obj.get("patches", []):
-        diff_text = item["diff"]
+        diff_text = item.get("diff", "")
         if looks_like_valid_unified_diff(diff_text):
             try_git_apply(diff_text)
             continue
@@ -106,4 +93,6 @@ def apply_patch_object(patch_obj: Dict[str, Any]) -> None:
         if not path:
             raise RuntimeError(f"Patch inválido y sin path detectable. Diff:\n{diff_text[:500]}")
         content = strip_diff_headers_to_content(diff_text)
+        if not content:
+            raise RuntimeError(f"Patch inválido y sin contenido recuperable. Diff:\n{diff_text[:500]}")
         write_file(path, content)
