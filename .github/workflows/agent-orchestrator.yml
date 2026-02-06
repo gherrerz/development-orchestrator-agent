@@ -30,14 +30,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r agent/requirements.txt
 
-      - name: Debug patch_apply.py
+      - name: Debug patch_apply.py (CI truth)
         run: |
-            echo "==== patch_apply.py head ===="
-            sed -n '1,120p' agent/tools/patch_apply.py
-            echo "==== grep apply_unified_diff ===="
-            grep -n "def apply_unified_diff" -n agent/tools/patch_apply.py || true
-            echo "==== grep looks_like_valid_unified_diff ===="
-            grep -n "looks_like_valid_unified_diff" -n agent/tools/patch_apply.py || true
+          echo "=== git rev-parse HEAD ==="
+          git rev-parse HEAD
+          echo "=== show patch_apply.py first 80 lines ==="
+          nl -ba agent/tools/patch_apply.py | sed -n '1,80p'
+          echo "=== functions present? ==="
+          grep -n "def apply_unified_diff" -n agent/tools/patch_apply.py || true
+          grep -n "def looks_like_valid_unified_diff" -n agent/tools/patch_apply.py || true
 
       - name: Run Orchestrator
         env:
