@@ -11,8 +11,10 @@ from jsonschema.exceptions import ValidationError
 
 from agent.tools.llm import chat_json
 from agent.tools.github_tools import (
-    get_issue, create_branch, git_status_porcelain, git_commit_all, git_push, gh_pr_create, current_branch
+    get_issue, create_branch, git_status_porcelain, git_commit_all, git_push,
+    gh_pr_create, gh_issue_comment, current_branch
 )
+
 from agent.tools.repo_introspect import list_files, snapshot
 from agent.tools.patch_apply import apply_patch_object
 from agent.tools.pinecone_memory import upsert_texts, query as pine_query
@@ -317,6 +319,7 @@ def main():
 
     last_test_output = ""
     pr_url = None
+    final_test_exit: int = 999  # status final de tests (0 = OK)
 
     for i in range(1, max_iter + 1):
         # Refresh focused snapshot (optional: could include more files after changes)
@@ -387,6 +390,7 @@ def main():
             # y opcionalmente: break o continuar a repair
 
         last_test_output = out
+        final_test_exit = code
 
         iteration_notes.append(f"Iteración {i}: test exit={code}")
 
@@ -458,6 +462,7 @@ def main():
             apply_patch_object(test_report["recommended_patch"])
             code2, out2 = run_cmd(test_cmd)
             last_test_output = out2
+            final_test_exit = code2
             iteration_notes.append(f"Iteración {i} (fix): test exit={code2}")
             upsert_texts(repo, issue_number, [{
                 "id": f"iter_{i}_fix_{uuid.uuid4().hex}",
@@ -499,17 +504,45 @@ def main():
     if not changed:
         summary_lines.append("⚠️ No se detectaron cambios en el working tree. Revisa si el patch fue vacío.")
     else:
+        # Siempre persistimos la rama para no perder cambios
         git_commit_all(f"agent: implement issue #{issue_number}")
         git_push(branch)
 
-        pr_body = "\n".join(summary_lines) + "\n\n" + "Logs (último test output, truncado):\n```\n" + (last_test_output[:4000] or "") + "\n```"
-        pr_url = gh_pr_create(
-            title=f"[agent] Issue #{issue_number}: {issue_title[:80]}",
-            body=pr_body,
-            head=branch,
-            base="main"
-        )
-        summary_lines.append(f"✅ PR creado: {pr_url}")
+        tests_ok = (final_test_exit == 0)
+
+        if not tests_ok:
+            msg = (
+                f"⚠️ **No se creó PR** porque los tests no pasaron.\n\n"
+                f"- Branch: `{branch}`\n"
+                f"- Último exit code: `{final_test_exit}`\n\n"
+                f"**Salida (truncada):**\n```text\n{(last_test_output or '')[:2500]}\n```\n"
+            )
+            try:
+                gh_issue_comment(str(issue_number), msg)
+            except Exception:
+                print(msg)
+
+            summary_lines.append(f"⚠️ No se creó PR porque los tests fallaron. Branch: {branch}")
+        else:
+            pr_body = (
+                "\n".join(summary_lines)
+                + "\n\n"
+                + "Logs (último test output, truncado):\n```\n"
+                + (last_test_output[:4000] or "")
+                + "\n```"
+            )
+            pr_url = gh_pr_create(
+                title=f"[agent] Issue #{issue_number}: {issue_title[:80]}",
+                body=pr_body,
+                head=branch,
+                base="main"
+            )
+            summary_lines.append(f"✅ PR creado: {pr_url}")
+            try:
+                gh_issue_comment(str(issue_number), f"✅ PR creado: {pr_url}")
+            except Exception:
+                pass
+
 
     with open(os.path.join(ROOT, "out", "summary.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(summary_lines).strip())
