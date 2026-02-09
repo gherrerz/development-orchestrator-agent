@@ -1,4 +1,4 @@
-name: agent-orchestrator
+name: Agent Orchestrator (Issue Command)
 
 on:
   issue_comment:
@@ -6,12 +6,12 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
   issues: write
+  pull-requests: write
 
 jobs:
-  run:
-    if: contains(github.event.comment.body, '/agent run')
+  run-agent:
+    if: startsWith(github.event.comment.body, '/agent run')
     runs-on: ubuntu-latest
 
     steps:
@@ -20,72 +20,249 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Extract stack/language/test_command from comment
+        id: req
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          python - << 'PY'
+          import os, re, json
+          body = os.environ.get("COMMENT_BODY","")
+          m = re.search(r"\{.*\}", body, re.S)
+          req = json.loads(m.group(0)) if m else {}
+          stack = (req.get("stack") or "").strip()
+          lang = (req.get("language") or "").strip()
+          test_cmd = (req.get("test_command") or "").strip()
+          max_it = req.get("max_iterations", "")
+          # default language guess by stack prefix
+          if not lang:
+            if stack.startswith("python-"): lang = "python"
+            elif stack.startswith("java-"): lang = "java"
+            elif stack.startswith("node-"): lang = "node"
+            elif stack.startswith("dotnet-"): lang = "dotnet"
+            elif stack.startswith("go-"): lang = "go"
+          # outputs
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a", encoding="utf-8") as f:
+            f.write(f"stack={stack}\n")
+            f.write(f"language={lang}\n")
+            f.write(f"test_command={test_cmd}\n")
+            f.write(f"max_iterations={max_it}\n")
+          print("Parsed request:", req)
+          PY
+
+      # ---------- Setup toolchains ----------
+      - name: Setup Python
+        if: steps.req.outputs.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Setup Java (Temurin)
+        if: steps.req.outputs.language == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+          cache: "maven"
+
+      - name: Setup Node
+        if: steps.req.outputs.language == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Setup .NET
+        if: steps.req.outputs.language == 'dotnet'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Setup Go
+        if: steps.req.outputs.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      # ---------- Configure git identity ----------
       - name: Configure git author
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      # ---------- Install agent deps ----------
       - name: Install agent deps
+        if: steps.req.outputs.language == 'python'
         run: |
           python -m pip install --upgrade pip
-          pip install -r agent/requirements.txt
-
-      - name: Install project deps (best-effort)
-        run: |
-          python -m pip install --upgrade pip
-          # Siempre asegurar pytest disponible
-          # deps mínimas para este stack
-          pip install fastapi "uvicorn[standard]" pydantic pytest httpx
-
-          # Instalar dependencias del repo si existen
-          if [ -f requirements.txt ]; then
+          if [ -f agent/requirements.txt ]; then
+            pip install -r agent/requirements.txt
+          elif [ -f requirements.txt ]; then
+            # fallback if agent deps are in root
             pip install -r requirements.txt
           fi
 
+      # ---------- Install project deps (auto + stack catalog) ----------
+      - name: Install project deps (auto + catalog)
+        shell: bash
+        env:
+          STACK: ${{ steps.req.outputs.stack }}
+        run: |
+          set -euo pipefail
+          echo "STACK=$STACK"
+
+          # 1) Auto install by common files (best-effort, safe for most repos)
+          if command -v python >/dev/null 2>&1; then
+            python -m pip install --upgrade pip || true
+          fi
+
+          # Python heuristics
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
           if [ -f pyproject.toml ]; then
-            # Best-effort: si usa poetry/uv no lo asumimos; intentamos extras comunes
+            # best-effort install (works for many setuptools/pep517 projects)
             pip install .
           fi
 
-      - name: Debug patch_apply.py (CI truth)
+          # Node heuristics
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f package.json ]; then
+            npm install
+          fi
+
+          # Java heuristics
+          if [ -f pom.xml ]; then
+            mvn -q -DskipTests package
+          fi
+          if [ -f gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew -q assemble
+          fi
+
+          # .NET heuristics
+          if ls *.sln >/dev/null 2>&1 || ls *.csproj >/dev/null 2>&1; then
+            dotnet restore
+          fi
+
+          # Go heuristics
+          if [ -f go.mod ]; then
+            go mod download
+          fi
+
+          # 2) Stack catalog reinforcement: install extra deps by stack (if catalog exists)
+          if [ -f agent/stacks/catalog.yml ]; then
+            python - << 'PY'
+            import os, sys
+            try:
+              import yaml
+            except Exception:
+              # if PyYAML not installed, skip catalog step
+              print("PyYAML not installed; skipping catalog reinforcement.")
+              sys.exit(0)
+
+            stack = os.environ.get("STACK","")
+            if not stack:
+              print("No stack provided; skipping catalog.")
+              sys.exit(0)
+
+            with open("agent/stacks/catalog.yml","r",encoding="utf-8") as f:
+              catalog = yaml.safe_load(f) or {}
+
+            spec = catalog.get(stack)
+            if not spec:
+              print(f"Stack '{stack}' not found in catalog; skipping.")
+              sys.exit(0)
+
+            deps = spec.get("deps",{}) or {}
+            pip_deps = deps.get("pip",[]) or []
+            npm_deps = deps.get("npm",[]) or []
+            dotnet_tools = deps.get("dotnet_tools",[]) or []
+
+            # Emit shell commands as output so we can run without embedding secrets
+            def sh(cmd):
+              print(cmd)
+
+            if pip_deps:
+              sh("python -m pip install " + " ".join([repr(x) for x in pip_deps]).replace("'", ""))
+            if npm_deps:
+              sh("npm install " + " ".join(npm_deps))
+            if dotnet_tools:
+              for t in dotnet_tools:
+                sh(f"dotnet tool install -g {t} || true")
+            PY | bash
+          fi
+
+      # ---------- (Optional) Debug: show current HEAD and key files ----------
+      - name: Debug context
         run: |
           echo "=== git rev-parse HEAD ==="
           git rev-parse HEAD
-          echo "=== show patch_apply.py first 80 lines ==="
-          nl -ba agent/tools/patch_apply.py | sed -n '1,80p'
-          echo "=== functions present? ==="
-          grep -n "def apply_unified_diff" -n agent/tools/patch_apply.py || true
-          grep -n "def looks_like_valid_unified_diff" -n agent/tools/patch_apply.py || true
+          echo "=== stack/language ==="
+          echo "STACK=${{ steps.req.outputs.stack }}"
+          echo "LANG=${{ steps.req.outputs.language }}"
+          echo "TEST_COMMAND=${{ steps.req.outputs.test_command }}"
 
+      # ---------- Run orchestrator ----------
       - name: Run Orchestrator
         env:
-            OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-            OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
-            PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
-            PINECONE_INDEX_HOST: ${{ secrets.PINECONE_INDEX_HOST }}
-            PINECONE_NAMESPACE_PREFIX: ${{ secrets.PINECONE_NAMESPACE_PREFIX }}
-            GH_TOKEN: ${{ secrets.GH_PAT }}
-            REPO: ${{ github.repository }}
-            ISSUE_NUMBER: ${{ github.event.issue.number }}
-            COMMENT_BODY: ${{ github.event.comment.body }}
-            COMMENT_ID: ${{ github.event.comment.id }}
-            PYTHONPATH: ${{ github.workspace }}
+          GH_TOKEN: ${{ secrets.GH_PAT }} # PAT for PR create + issue comment
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          PYTHONPATH: ${{ github.workspace }}
+
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          OPENAI_EMBED_MODEL: ${{ secrets.OPENAI_EMBED_MODEL }}
+
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          PINECONE_INDEX_HOST: ${{ secrets.PINECONE_INDEX_HOST }}
+          PINECONE_NAMESPACE_PREFIX: ${{ secrets.PINECONE_NAMESPACE_PREFIX }}
         run: |
           python -m agent.orchestrator
 
-      - name: Comment back to Issue
+      # ---------- Comment summary back robustly ----------
+      - name: Comment back to Issue (robust)
         if: always()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
+          set +e
+
+          # Prefer truncation to avoid huge payloads
           if [ -f agent/out/summary.md ]; then
-            gh issue comment "$ISSUE_NUMBER" --body "$(cat agent/out/summary.md)"
-          else
-            gh issue comment "$ISSUE_NUMBER" --body "⚠️ El agente falló antes de generar summary.md. Revisa logs del workflow."
+            head -c 8000 agent/out/summary.md > agent/out/summary.trunc.md
           fi
+
+          post_comment () {
+            if [ -f agent/out/summary.trunc.md ]; then
+              gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file agent/out/summary.trunc.md
+            elif [ -f agent/out/summary.md ]; then
+              gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file agent/out/summary.md
+            else
+              gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "⚠️ El agente falló antes de generar summary.md. Revisa logs del workflow."
+            fi
+          }
+
+          for i in 1 2 3 4 5; do
+            post_comment
+            rc=$?
+            if [ $rc -eq 0 ]; then
+              echo "✅ Issue comment posted"
+              exit 0
+            fi
+            echo "⚠️ Failed to post comment (rc=$rc). Retrying... ($i/5)"
+            sleep $((i * i * 10))
+          done
+
+          echo "⚠️ Could not post comment after retries (likely rate limited). Not failing workflow."
+          exit 0
