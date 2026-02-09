@@ -1,35 +1,24 @@
-# development-orchestrator-agent
-# GitHub Actions Agent Orchestrator (Python)
+## Credit Simulation Endpoint
 
-## Trigger
-Comenta en un Issue:
+Se ha añadido un endpoint POST `/credit-simulation` para simular créditos.
 
-/agent run { ...json... }
+### Uso
 
-Ejemplo:
+Enviar un JSON con los siguientes campos:
 
-/agent run {
-  "stack": "python-fastapi",
-  "language": "python",
-  "user_story": "Como usuario, quiero ...",
-  "acceptance_criteria": ["..."],
-  "constraints": ["..."],
-  "test_command": "pytest -q",
-  "max_iterations": 2
+```json
+{
+  "amount": 10000.0,  
+  "term": 12,          
+  "interest_rate": 12.0
 }
+```
 
-## Secrets requeridos
-- OPENAI_API_KEY
-- PINECONE_API_KEY
-- PINECONE_INDEX_HOST
-Opcionales:
-- OPENAI_MODEL
-- OPENAI_EMBED_MODEL
-- PINECONE_NAMESPACE_PREFIX
+El endpoint devuelve un JSON con:
 
-## Resultado
-El agente:
-1) genera un plan,
-2) aplica cambios,
-3) corre tests,
-4) crea PR con evidencia y comenta al Issue.
+```json
+{
+  "monthly_payment": 888.49,
+  "total_payment": 10661.88
+}
+```
