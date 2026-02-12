@@ -2,21 +2,80 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Patch",
   "type": "object",
-  "required": ["patches", "notes"],
+  "required": [
+    "notes"
+  ],
   "properties": {
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
     "patches": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["path", "diff"],
+        "required": [
+          "path",
+          "diff"
+        ],
         "properties": {
-          "path": { "type": "string" },
-          "diff": { "type": "string", "minLength": 10 }
+          "path": {
+            "type": "string"
+          },
+          "diff": {
+            "type": "string",
+            "minLength": 10
+          }
         },
         "additionalProperties": false
       }
     },
-    "notes": { "type": "array", "items": { "type": "string" }, "default": [] }
+    "files": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "required": [
+              "content"
+            ],
+            "properties": {
+              "operation": {
+                "type": "string",
+                "enum": [
+                  "add",
+                  "modify",
+                  "delete"
+                ],
+                "default": "modify"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
   },
+  "oneOf": [
+    {
+      "required": [
+        "patches"
+      ]
+    },
+    {
+      "required": [
+        "files"
+      ]
+    }
+  ],
   "additionalProperties": false
 }

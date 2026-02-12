@@ -11,12 +11,37 @@ from jsonschema.exceptions import ValidationError
 
 from agent.tools.llm import chat_json
 from agent.tools.github_tools import (
-    get_issue, create_branch, git_status_porcelain, git_commit_all, git_push,
-    gh_pr_create, gh_issue_comment, current_branch
+    get_issue, create_branch, git_status_porcelain, git_commit_all, git_push, gh_pr_create, current_branch
 )
-
 from agent.tools.repo_introspect import list_files, snapshot
 from agent.tools.patch_apply import apply_patch_object
+
+# --- Stack catalog defaults (language/test_command) ---
+def _load_stack_catalog() -> dict:
+    try:
+        import yaml  # type: ignore
+    except Exception:
+        return {}
+    try:
+        with open(os.path.join(ROOT, "stacks", "catalog.yml"), "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+def apply_stack_defaults(run_req: dict) -> dict:
+    stack = (run_req.get("stack") or "").strip()
+    if not stack:
+        return run_req
+    catalog = _load_stack_catalog()
+    spec = catalog.get(stack) or {}
+    if not run_req.get("language") and spec.get("language"):
+        run_req["language"] = spec["language"]
+    if not run_req.get("test_command") and spec.get("test_default"):
+        run_req["test_command"] = spec["test_default"]
+    return run_req
+
 from agent.tools.pinecone_memory import upsert_texts, query as pine_query
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -231,6 +256,7 @@ def main():
     issue_body = issue.get("body", "") or ""
 
     run_req = extract_json_from_comment(comment_body)
+    run_req = apply_stack_defaults(run_req)
     safe_validate(run_req, RUN_SCHEMA, "run_request.schema.json")
 
     # Build initial query for memory
@@ -318,8 +344,8 @@ def main():
     max_iter = int(run_req.get("max_iterations", 2))
 
     last_test_output = ""
+    final_test_exit = 999  # 0 = tests OK
     pr_url = None
-    final_test_exit: int = 999  # status final de tests (0 = OK)
 
     for i in range(1, max_iter + 1):
         # Refresh focused snapshot (optional: could include more files after changes)
@@ -378,6 +404,7 @@ def main():
 
         # Run tests
         code, out = run_cmd(test_cmd)
+        final_test_exit = code
         if "pytest: not found" in out or "/bin/sh: 1: pytest: not found" in out:
             # reporta en formato schema y salta test agent
             test_report = {
@@ -390,7 +417,6 @@ def main():
             # y opcionalmente: break o continuar a repair
 
         last_test_output = out
-        final_test_exit = code
 
         iteration_notes.append(f"Iteración {i}: test exit={code}")
 
@@ -461,8 +487,8 @@ def main():
             # apply recommended patch and re-run tests once within same iteration
             apply_patch_object(test_report["recommended_patch"])
             code2, out2 = run_cmd(test_cmd)
-            last_test_output = out2
             final_test_exit = code2
+            last_test_output = out2
             iteration_notes.append(f"Iteración {i} (fix): test exit={code2}")
             upsert_texts(repo, issue_number, [{
                 "id": f"iter_{i}_fix_{uuid.uuid4().hex}",
@@ -504,45 +530,31 @@ def main():
     if not changed:
         summary_lines.append("⚠️ No se detectaron cambios en el working tree. Revisa si el patch fue vacío.")
     else:
-        # Siempre persistimos la rama para no perder cambios
+        # Persist branch always (so changes aren't lost)
         git_commit_all(f"agent: implement issue #{issue_number}")
         git_push(branch)
 
         tests_ok = (final_test_exit == 0)
-
         if not tests_ok:
-            msg = (
-                f"⚠️ **No se creó PR** porque los tests no pasaron.\n\n"
-                f"- Branch: `{branch}`\n"
-                f"- Último exit code: `{final_test_exit}`\n\n"
-                f"**Salida (truncada):**\n```text\n{(last_test_output or '')[:2500]}\n```\n"
-            )
-            try:
-                gh_issue_comment(str(issue_number), msg)
-            except Exception:
-                print(msg)
-
-            summary_lines.append(f"⚠️ No se creó PR porque los tests fallaron. Branch: {branch}")
+            summary_lines.append(f"⚠️ Tests no pasaron (exit={final_test_exit}). No se creará PR. Branch: `{branch}`")
         else:
-            pr_body = (
-                "\n".join(summary_lines)
-                + "\n\n"
-                + "Logs (último test output, truncado):\n```\n"
-                + (last_test_output[:4000] or "")
-                + "\n```"
-            )
-            pr_url = gh_pr_create(
-                title=f"[agent] Issue #{issue_number}: {issue_title[:80]}",
-                body=pr_body,
-                head=branch,
-                base="main"
-            )
-            summary_lines.append(f"✅ PR creado: {pr_url}")
-            try:
-                gh_issue_comment(str(issue_number), f"✅ PR creado: {pr_url}")
-            except Exception:
-                pass
+            pr_body = "
+".join(summary_lines) + "
 
+" + "Logs (último test output, truncado):
+```
+" + (last_test_output[:4000] or "") + "
+```"
+            try:
+                pr_url = gh_pr_create(
+                    title=f"[agent] Issue #{issue_number}: {issue_title[:80]}",
+                    body=pr_body,
+                    head=branch,
+                    base="main"
+                )
+                summary_lines.append(f"✅ PR creado: {pr_url}")
+            except Exception as e:
+                summary_lines.append(f"⚠️ No se pudo crear PR automáticamente: {e}. Branch: `{branch}`")
 
     with open(os.path.join(ROOT, "out", "summary.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(summary_lines).strip())

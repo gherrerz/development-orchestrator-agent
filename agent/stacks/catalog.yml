@@ -1,68 +1,62 @@
 python-fastapi-postgres:
   language: python
-  description: "FastAPI + Postgres, servicios REST típicos"
+  description: FastAPI + Postgres (SQLAlchemy/Alembic), servicios REST típicos
   deps:
     pip:
-      - fastapi
-      - "uvicorn[standard]"
-      - pydantic
-      - sqlalchemy
-      - psycopg2-binary
-      - alembic
-      - pytest
-      - httpx
-  test_default: "pytest -q"
-
+    - fastapi
+    - uvicorn[standard]
+    - pydantic
+    - sqlalchemy
+    - psycopg2-binary
+    - alembic
+    - pytest
+    - httpx
+  test_default: pytest -q
 python-django:
   language: python
-  description: "Django (REST + admin) común en backoffice"
+  description: Django + DRF + Postgres, backoffice/admin
   deps:
     pip:
-      - django
-      - djangorestframework
-      - psycopg2-binary
-      - pytest
-      - pytest-django
-  test_default: "pytest -q"
-
+    - django
+    - djangorestframework
+    - psycopg2-binary
+    - pytest
+    - pytest-django
+  test_default: pytest -q
 java-spring-boot:
   language: java
-  description: "Spring Boot microservices"
+  description: Spring Boot microservices (Maven/Gradle)
   deps:
     maven: true
-  test_default: "mvn -q test"
-
+  test_default: mvn -q test
 node-express:
   language: node
-  description: "Node.js Express APIs"
+  description: Node.js Express API
   deps:
     npm:
-      - express
-      - jest
-      - supertest
-  test_default: "npm test --silent"
-
+    - express
+    - jest
+    - supertest
+  test_default: npm test --silent
 node-react:
   language: node
-  description: "React front-end (SPA)"
+  description: React SPA
   deps:
     npm:
-      - react
-      - react-dom
-      - "@testing-library/react"
-      - "@testing-library/jest-dom"
-  test_default: "npm test --silent"
-
+    - react
+    - react-dom
+    - '@testing-library/react'
+    - '@testing-library/jest-dom'
+  test_default: npm test --silent
 dotnet-webapi:
   language: dotnet
-  description: ".NET 8 Web API"
+  description: .NET 8 Web API
   deps:
     dotnet_tools: []
-  test_default: "dotnet test -v minimal"
-
+  test_default: dotnet test -v minimal
 go-fiber:
   language: go
-  description: "Go Fiber APIs"
+  description: Go Fiber API
   deps:
     go: true
-  test_default: "go test ./..."
+  test_default: go test ./...

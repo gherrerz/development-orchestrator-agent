@@ -30,36 +30,43 @@ jobs:
           import os, re, json
           body = os.environ.get("COMMENT_BODY","")
           m = re.search(r"\{.*\}", body, re.S)
-          req = json.loads(m.group(0)) if m else {}
-          stack = (req.get("stack") or "").strip()
-          lang = (req.get("language") or "").strip()
-          test_cmd = (req.get("test_command") or "").strip()
-          max_it = req.get("max_iterations", "")
-          # default language guess by stack prefix
-          if not lang:
-            if stack.startswith("python-"): lang = "python"
-            elif stack.startswith("java-"): lang = "java"
-            elif stack.startswith("node-"): lang = "node"
-            elif stack.startswith("dotnet-"): lang = "dotnet"
-            elif stack.startswith("go-"): lang = "go"
-          # outputs
+          stack = ""
+          lang = ""
+          test_cmd = ""
+          if m:
+            req = json.loads(m.group(0))
+            stack = (req.get("stack") or "").strip()
+            lang = (req.get("language") or "").strip()
+            test_cmd = (req.get("test_command") or "").strip()
+
+            if not lang:
+              if stack.startswith("python-"): lang = "python"
+              elif stack.startswith("java-"): lang = "java"
+              elif stack.startswith("node-"): lang = "node"
+              elif stack.startswith("dotnet-"): lang = "dotnet"
+              elif stack.startswith("go-"): lang = "go"
+
           out = os.environ["GITHUB_OUTPUT"]
           with open(out, "a", encoding="utf-8") as f:
             f.write(f"stack={stack}\n")
             f.write(f"language={lang}\n")
             f.write(f"test_command={test_cmd}\n")
-            f.write(f"max_iterations={max_it}\n")
-          print("Parsed request:", req)
+          print("stack=", stack, "language=", lang, "test_command=", test_cmd)
           PY
 
-      # ---------- Setup toolchains ----------
-      - name: Setup Python
-        if: steps.req.outputs.language == 'python'
+      # ---------- Agent runtime (always Python) ----------
+      - name: Setup Python (agent runtime)
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
+      - name: Install agent deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r agent/requirements.txt
+
+      # ---------- Target toolchains (conditional) ----------
       - name: Setup Java (Temurin)
         if: steps.req.outputs.language == 'java'
         uses: actions/setup-java@v4
@@ -88,25 +95,12 @@ jobs:
           go-version: "1.22"
           cache: true
 
-      # ---------- Configure git identity ----------
       - name: Configure git author
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      # ---------- Install agent deps ----------
-      - name: Install agent deps
-        if: steps.req.outputs.language == 'python'
-        run: |
-          python -m pip install --upgrade pip
-          if [ -f agent/requirements.txt ]; then
-            pip install -r agent/requirements.txt
-          elif [ -f requirements.txt ]; then
-            # fallback if agent deps are in root
-            pip install -r requirements.txt
-          fi
-
-      # ---------- Install project deps (auto + stack catalog) ----------
+      # ---------- Install project deps (auto + catalog reinforcement) ----------
       - name: Install project deps (auto + catalog)
         shell: bash
         env:
@@ -115,28 +109,24 @@ jobs:
           set -euo pipefail
           echo "STACK=$STACK"
 
-          # 1) Auto install by common files (best-effort, safe for most repos)
-          if command -v python >/dev/null 2>&1; then
-            python -m pip install --upgrade pip || true
-          fi
+          # Auto install by common files (best-effort)
 
-          # Python heuristics
+          # Python project heuristics
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
           if [ -f pyproject.toml ]; then
-            # best-effort install (works for many setuptools/pep517 projects)
             pip install .
           fi
 
-          # Node heuristics
+          # Node project heuristics
           if [ -f package-lock.json ]; then
             npm ci
           elif [ -f package.json ]; then
             npm install
           fi
 
-          # Java heuristics
+          # Java project heuristics
           if [ -f pom.xml ]; then
             mvn -q -DskipTests package
           fi
@@ -145,30 +135,25 @@ jobs:
             ./gradlew -q assemble
           fi
 
-          # .NET heuristics
+          # .NET project heuristics
           if ls *.sln >/dev/null 2>&1 || ls *.csproj >/dev/null 2>&1; then
             dotnet restore
           fi
 
-          # Go heuristics
+          # Go project heuristics
           if [ -f go.mod ]; then
             go mod download
           fi
 
-          # 2) Stack catalog reinforcement: install extra deps by stack (if catalog exists)
+          # Stack catalog reinforcement (installs extras when repo doesn't declare them yet)
           if [ -f agent/stacks/catalog.yml ]; then
-            python - << 'PY'
+            python - << 'PY' | bash
             import os, sys
-            try:
-              import yaml
-            except Exception:
-              # if PyYAML not installed, skip catalog step
-              print("PyYAML not installed; skipping catalog reinforcement.")
-              sys.exit(0)
+            import yaml
 
             stack = os.environ.get("STACK","")
             if not stack:
-              print("No stack provided; skipping catalog.")
+              print("echo 'No stack provided; skipping catalog.'")
               sys.exit(0)
 
             with open("agent/stacks/catalog.yml","r",encoding="utf-8") as f:
@@ -176,29 +161,20 @@ jobs:
 
             spec = catalog.get(stack)
             if not spec:
-              print(f"Stack '{stack}' not found in catalog; skipping.")
+              print(f"echo 'Stack {stack} not in catalog; skipping.'")
               sys.exit(0)
 
             deps = spec.get("deps",{}) or {}
             pip_deps = deps.get("pip",[]) or []
             npm_deps = deps.get("npm",[]) or []
-            dotnet_tools = deps.get("dotnet_tools",[]) or []
-
-            # Emit shell commands as output so we can run without embedding secrets
-            def sh(cmd):
-              print(cmd)
 
             if pip_deps:
-              sh("python -m pip install " + " ".join([repr(x) for x in pip_deps]).replace("'", ""))
+              print("python -m pip install " + " ".join([repr(x) for x in pip_deps]).replace("'", ""))
             if npm_deps:
-              sh("npm install " + " ".join(npm_deps))
-            if dotnet_tools:
-              for t in dotnet_tools:
-                sh(f"dotnet tool install -g {t} || true")
-            PY | bash
+              print("npm install " + " ".join(npm_deps))
+            PY
           fi
 
-      # ---------- (Optional) Debug: show current HEAD and key files ----------
       - name: Debug context
         run: |
           echo "=== git rev-parse HEAD ==="
@@ -211,7 +187,7 @@ jobs:
       # ---------- Run orchestrator ----------
       - name: Run Orchestrator
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }} # PAT for PR create + issue comment
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
