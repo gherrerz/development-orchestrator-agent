@@ -538,13 +538,14 @@ def main():
         if not tests_ok:
             summary_lines.append(f"⚠️ Tests no pasaron (exit={final_test_exit}). No se creará PR. Branch: `{branch}`")
         else:
-            pr_body = "
-".join(summary_lines) + "
-
-" + "Logs (último test output, truncado):
-```
-" + (last_test_output[:4000] or "") + "
-```"
+            pr_body = (
+                "\n".join(summary_lines)
+                + "\n\n"
+                + "Logs (último test output, truncado):\n"
+                + "```text\n"
+                + (last_test_output[:4000] if last_test_output else "")
+                + "\n```"
+            )
             try:
                 pr_url = gh_pr_create(
                     title=f"[agent] Issue #{issue_number}: {issue_title[:80]}",
