@@ -18,7 +18,7 @@
       "default": []
     },
     "test_command": { "type": "string", "default": "pytest -q" },
-    "max_iterations": { "type": "integer", "minimum": 1, "maximum": 5, "default": 2 }
+    "max_iterations": { "type": "integer", "minimum": 1, "maximum": 15, "default": 2 }
   },
   "additionalProperties": false
 }

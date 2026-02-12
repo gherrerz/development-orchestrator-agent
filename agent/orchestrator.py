@@ -257,6 +257,37 @@ def main():
 
     run_req = extract_json_from_comment(comment_body)
     run_req = apply_stack_defaults(run_req)
+
+    # --- Robustez: clamp max_iterations al rango permitido por el schema ---
+    orig_mi = run_req.get("max_iterations", None)
+    try:
+        mi = int(orig_mi) if orig_mi is not None else int(
+            RUN_SCHEMA.get("properties", {})
+                    .get("max_iterations", {})
+                    .get("default", 2)
+        )
+    except Exception:
+        mi = int(
+            RUN_SCHEMA.get("properties", {})
+                    .get("max_iterations", {})
+                    .get("default", 2)
+        )
+
+    # Usa min/max del schema si existen (evita hardcodear 5)
+    mi_schema = RUN_SCHEMA.get("properties", {}).get("max_iterations", {})
+    mi_min = mi_schema.get("minimum", 1)
+    mi_max = mi_schema.get("maximum", 5)
+
+    if mi < mi_min:
+        mi = mi_min
+    if mi > mi_max:
+        mi = mi_max
+
+    run_req["max_iterations"] = mi
+    # (opcional) guarda el solicitado para reportarlo después
+    run_req["max_iterations_requested"] = orig_mi
+    # --- fin clamp ---
+
     safe_validate(run_req, RUN_SCHEMA, "run_request.schema.json")
 
     # Build initial query for memory
