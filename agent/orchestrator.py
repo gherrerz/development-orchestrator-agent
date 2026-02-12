@@ -189,17 +189,67 @@ def normalize_patch(patch_obj: Dict[str, Any]) -> Dict[str, Any]:
 
     return patch_obj
 
+from typing import Dict, Any, List
+
 def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[str, Any]:
+    def _to_text(x: Any, limit: int = 400) -> str:
+        """Convierte cualquier objeto a texto seguro, truncado."""
+        if x is None:
+            return ""
+        if isinstance(x, str):
+            return x[:limit]
+        try:
+            import json
+            return json.dumps(x, ensure_ascii=False)[:limit]
+        except Exception:
+            return str(x)[:limit]
+
     # unwrap common wrapper
     if isinstance(tr, dict) and "test_report" in tr and isinstance(tr["test_report"], dict):
         tr = tr["test_report"]
 
-    # already correct
-    if "passed" in tr and "summary" in tr and "acceptance_criteria_status" in tr:
-        return tr
+    # If already in expected shape, still sanitize types (robust)
+    if isinstance(tr, dict) and "passed" in tr and "summary" in tr and "acceptance_criteria_status" in tr:
+        passed_val = bool(tr.get("passed", False))
+        summary_val = _to_text(tr.get("summary"), limit=2000)  # summary puede ser más largo
+        ac_status = tr.get("acceptance_criteria_status")
+
+        # Si viene mal tipeado, lo reconstruimos
+        if not isinstance(ac_status, list):
+            criteria = run_req.get("acceptance_criteria") or []
+            evidence_base = tr.get("criteria_verification") or tr.get("summary") or tr.get("test_summary") or ""
+            ev = _to_text(evidence_base, limit=400)
+            if criteria:
+                ac_status = [{"criterion": c, "met": passed_val, "evidence": ev} for c in criteria]
+            else:
+                ac_status = [{"criterion": "N/A", "met": passed_val, "evidence": ev or summary_val[:400]}]
+        else:
+            # Sanitiza cada elemento
+            cleaned: List[Dict[str, Any]] = []
+            for item in ac_status:
+                if not isinstance(item, dict):
+                    cleaned.append({"criterion": "N/A", "met": passed_val, "evidence": _to_text(item, 400)})
+                    continue
+                cleaned.append({
+                    "criterion": _to_text(item.get("criterion", "N/A"), 200),
+                    "met": bool(item.get("met", passed_val)),
+                    "evidence": _to_text(item.get("evidence", ""), 400),
+                })
+            ac_status = cleaned
+
+        out = {
+            "passed": passed_val,
+            "summary": summary_val,
+            "acceptance_criteria_status": ac_status,
+        }
+        if "recommended_patch" in tr:
+            out["recommended_patch"] = tr["recommended_patch"]
+        return out
 
     # map common alternative keys
-    passed = None
+    if not isinstance(tr, dict):
+        tr = {"test_summary": tr}
+
     if "tests_passed" in tr:
         passed = bool(tr["tests_passed"])
     elif "passed" in tr:
@@ -208,21 +258,21 @@ def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[s
         passed = False
 
     summary = tr.get("summary") or tr.get("test_summary") or "Resultado de pruebas no especificado."
+    summary_txt = _to_text(summary, limit=2000)
 
-    ac_list = []
+    ac_list: List[Dict[str, Any]] = []
     criteria = run_req.get("acceptance_criteria") or []
     if criteria:
-        # if model provided criteria_verification text, use as evidence
         evidence_base = tr.get("criteria_verification") or tr.get("summary") or tr.get("test_summary") or ""
+        ev = _to_text(evidence_base, limit=400)
         for c in criteria:
-            ac_list.append({"criterion": c, "met": passed, "evidence": evidence_base[:400]})
+            ac_list.append({"criterion": _to_text(c, 200), "met": bool(passed), "evidence": ev})
     else:
-        # no acceptance criteria provided
-        ac_list = [{"criterion": "N/A", "met": passed, "evidence": summary[:400]}]
+        ac_list = [{"criterion": "N/A", "met": bool(passed), "evidence": summary_txt[:400]}]
 
     out = {
-        "passed": passed,
-        "summary": summary,
+        "passed": bool(passed),
+        "summary": summary_txt,
         "acceptance_criteria_status": ac_list
     }
 
