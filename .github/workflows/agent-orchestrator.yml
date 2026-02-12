@@ -147,33 +147,67 @@ jobs:
 
           # Stack catalog reinforcement (installs extras when repo doesn't declare them yet)
           if [ -f agent/stacks/catalog.yml ]; then
-            python - << 'PY' | bash
-            import os, sys
-            import yaml
+            python - << 'PY'
+          import os, sys, subprocess
+          from pathlib import Path
 
-            stack = os.environ.get("STACK","")
-            if not stack:
-              print("echo 'No stack provided; skipping catalog.'")
+          stack = os.environ.get("STACK","").strip()
+          if not stack:
+              print("No stack provided; skipping catalog.")
               sys.exit(0)
 
-            with open("agent/stacks/catalog.yml","r",encoding="utf-8") as f:
+          try:
+              import yaml
+          except Exception:
+              print("PyYAML not installed; skipping catalog.")
+              sys.exit(0)
+
+          repo = Path(".")
+          has_requirements = (repo / "requirements.txt").is_file()
+          has_pyproject = (repo / "pyproject.toml").is_file()
+          has_package_json = (repo / "package.json").is_file()
+          has_pom = (repo / "pom.xml").is_file()
+          has_gradle = (repo / "build.gradle").is_file() or (repo / "build.gradle.kts").is_file()
+          has_sln = any(repo.glob("*.sln"))
+          has_csproj = any(repo.glob("*.csproj"))
+          has_go_mod = (repo / "go.mod").is_file()
+
+          with open("agent/stacks/catalog.yml","r",encoding="utf-8") as f:
               catalog = yaml.safe_load(f) or {}
 
-            spec = catalog.get(stack)
-            if not spec:
-              print(f"echo 'Stack {stack} not in catalog; skipping.'")
+          spec = catalog.get(stack)
+          if not spec:
+              print(f"Stack '{stack}' not in catalog; skipping.")
               sys.exit(0)
 
-            deps = spec.get("deps",{}) or {}
-            pip_deps = deps.get("pip",[]) or []
-            npm_deps = deps.get("npm",[]) or []
+          deps = spec.get("deps",{}) or {}
+          pip_deps = deps.get("pip",[]) or []
+          npm_deps = deps.get("npm",[]) or []
 
-            if pip_deps:
-              print("python -m pip install " + " ".join([repr(x) for x in pip_deps]).replace("'", ""))
-            if npm_deps:
-              print("npm install " + " ".join(npm_deps))
-            PY
-          fi
+          def run(cmd):
+              print("+", " ".join(cmd))
+              subprocess.run(cmd, check=False)
+
+          # ✅ Gating: si el repo ya declara deps, NO usar catálogo para ese ecosistema.
+          # Python: si requirements.txt o pyproject.toml existen, no instalar pip_deps de catálogo.
+          if pip_deps:
+              if has_requirements or has_pyproject:
+                  print("Repo already declares Python deps (requirements.txt/pyproject.toml). Skipping catalog pip deps.")
+              else:
+                  run([sys.executable, "-m", "pip", "install", *pip_deps])
+
+          # Node: si package.json existe, no instalar npm_deps del catálogo.
+          if npm_deps:
+              if has_package_json:
+                  print("Repo already declares Node deps (package.json). Skipping catalog npm deps.")
+              else:
+                  if subprocess.call(["bash","-lc","command -v npm >/dev/null 2>&1"]) == 0:
+                      run(["npm", "install", *npm_deps])
+                  else:
+                      print("npm not available; skipping npm deps.")
+
+          # Java/.NET/Go: normalmente el catálogo no instala deps directas;
+          # se resuelven por pom/gradle/dotnet restore/go mod, así que no hacemos nada aquí.
 
       - name: Debug context
         run: |
