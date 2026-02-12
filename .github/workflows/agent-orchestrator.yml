@@ -166,11 +166,6 @@ jobs:
           has_requirements = (repo / "requirements.txt").is_file()
           has_pyproject = (repo / "pyproject.toml").is_file()
           has_package_json = (repo / "package.json").is_file()
-          has_pom = (repo / "pom.xml").is_file()
-          has_gradle = (repo / "build.gradle").is_file() or (repo / "build.gradle.kts").is_file()
-          has_sln = any(repo.glob("*.sln"))
-          has_csproj = any(repo.glob("*.csproj"))
-          has_go_mod = (repo / "go.mod").is_file()
 
           with open("agent/stacks/catalog.yml","r",encoding="utf-8") as f:
               catalog = yaml.safe_load(f) or {}
@@ -188,15 +183,14 @@ jobs:
               print("+", " ".join(cmd))
               subprocess.run(cmd, check=False)
 
-          # ✅ Gating: si el repo ya declara deps, NO usar catálogo para ese ecosistema.
-          # Python: si requirements.txt o pyproject.toml existen, no instalar pip_deps de catálogo.
+          # ✅ Bonus gating:
+          # - Si el repo ya declara deps Python/Node, NO instales pip/npm del catálogo.
           if pip_deps:
               if has_requirements or has_pyproject:
                   print("Repo already declares Python deps (requirements.txt/pyproject.toml). Skipping catalog pip deps.")
               else:
                   run([sys.executable, "-m", "pip", "install", *pip_deps])
 
-          # Node: si package.json existe, no instalar npm_deps del catálogo.
           if npm_deps:
               if has_package_json:
                   print("Repo already declares Node deps (package.json). Skipping catalog npm deps.")
@@ -205,9 +199,8 @@ jobs:
                       run(["npm", "install", *npm_deps])
                   else:
                       print("npm not available; skipping npm deps.")
-
-          # Java/.NET/Go: normalmente el catálogo no instala deps directas;
-          # se resuelven por pom/gradle/dotnet restore/go mod, así que no hacemos nada aquí.
+          PY
+          fi
 
       - name: Debug context
         run: |
