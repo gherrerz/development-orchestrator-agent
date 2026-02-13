@@ -22,3 +22,9 @@ Devuelve EXACTAMENTE un objeto JSON raíz que cumpla patch.schema.json:
 - Si necesitas crear un archivo vacío (por ejemplo __init__.py), NO escribas "(archivo vacío)".
 - En formato files: usa "content": "".
 - En formato diff: no incluyas líneas añadidas; solo los headers/hunk adecuados para archivo vacío.
+
+PRIORIDAD ABSOLUTA (Iteración):
+- Si recibes previous_test_output o previous_failure_bundle: tu objetivo es corregir la causa raíz del fallo actual de tests antes de agregar features nuevas.
+- Usa changed_files/diff_patch_tail y test_output_tail (si están presentes) para ubicar el problema.
+- Si el fallo es por dependencias/configuración (ImportError/ModuleNotFoundError/DJANGO_SETTINGS_MODULE), agrega lo mínimo necesario (requirements/pytest.ini/conftest.py) para que los tests corran en CI.
+- Cambios pequeños, verificables y alineados al stack seleccionado.

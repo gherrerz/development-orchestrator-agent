@@ -38,8 +38,8 @@ def apply_stack_defaults(run_req: dict) -> dict:
     spec = catalog.get(stack) or {}
     if not run_req.get("language") and spec.get("language"):
         run_req["language"] = spec["language"]
-    if not run_req.get("test_command") and spec.get("test_default"):
-        run_req["test_command"] = spec["test_default"]
+    if (not run_req.get("test_command")) and spec.get("test_command"):
+        run_req["test_command"] = spec["test_command"]
     return run_req
 
 from agent.tools.pinecone_memory import upsert_texts, query as pine_query
@@ -50,206 +50,77 @@ def read(path: str) -> str:
     with open(os.path.join(ROOT, path), "r", encoding="utf-8") as f:
         return f.read()
 
-def load_schema(name: str) -> Dict[str, Any]:
-    with open(os.path.join(ROOT, "schemas", name), "r", encoding="utf-8") as f:
-        return json.load(f)
-
-RUN_SCHEMA = load_schema("run_request.schema.json")
-PLAN_SCHEMA = load_schema("plan.schema.json")
-PATCH_SCHEMA = load_schema("patch.schema.json")
-TEST_SCHEMA = load_schema("test_report.schema.json")
-
-def extract_json_from_comment(comment_body: str) -> Dict[str, Any]:
-    """
-    Expects: /agent run { ...json... }
-    """
-    m = re.search(r"/agent\s+run\s+(\{.*\})\s*$", comment_body, re.DOTALL)
+def extract_json_from_comment(body: str) -> Dict[str, Any]:
+    # Expected: /agent run { ...json... }
+    m = re.search(r"/agent\s+run\s+(\{.*\})\s*$", body, re.DOTALL)
     if not m:
         raise ValueError("No se encontró JSON. Usa: /agent run { ... }")
-    raw = m.group(1)
-    return json.loads(raw)
+    return json.loads(m.group(1))
 
-def safe_validate(obj: Dict[str, Any], schema: Dict[str, Any], schema_name: str) -> None:
+def safe_validate(obj: Any, schema: Dict[str, Any], schema_name: str) -> None:
     try:
         validate(instance=obj, schema=schema)
     except ValidationError as e:
         raise ValueError(f"JSON inválido para {schema_name}: {e.message}")
 
 def normalize_plan(plan_obj: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Fix common model deviations:
-    - unwrap {"plan": {...}}
-    - convert {"steps": [...]} to schema fields
-    """
+    # unwrap common wrapper { "plan": { ... } }
     if isinstance(plan_obj, dict) and "plan" in plan_obj and isinstance(plan_obj["plan"], dict):
         plan_obj = plan_obj["plan"]
 
-    # If model returned "steps" with richer fields, map them.
-    if "steps" in plan_obj and isinstance(plan_obj["steps"], list):
-        steps = plan_obj["steps"]
-
-        # Build tasks from steps
+    # convert alternative keys (steps -> tasks, files_to_modify/create -> files_to_touch, tests_strategy -> test_strategy)
+    if "tasks" not in plan_obj and "steps" in plan_obj and isinstance(plan_obj["steps"], list):
         tasks = []
-        files_to_touch = set()
-        test_strategy = plan_obj.get("test_strategy") or ""
+        files = set()
+        test_strategy = ""
+        for idx, step in enumerate(plan_obj["steps"], start=1):
+            title = step.get("step") or step.get("title") or f"Step {idx}"
+            desc = step.get("description") or step.get("details") or title
+            tasks.append({"id": f"T{idx}", "title": str(title), "description": str(desc)})
+            for p in (step.get("files_to_modify") or []):
+                files.add(str(p))
+            for p in (step.get("files_to_create") or []):
+                files.add(str(p))
+            if not test_strategy:
+                test_strategy = step.get("tests_strategy") or step.get("test_strategy") or step.get("tests") or ""
 
-        for idx, s in enumerate(steps, start=1):
-            desc = s.get("step") or s.get("description") or f"Step {idx}"
-            tasks.append({
-                "id": f"S{idx}",
-                "title": (desc[:60] + "...") if len(desc) > 60 else desc,
-                "description": desc
-            })
+        if "tasks" not in plan_obj:
+            plan_obj["tasks"] = tasks
+        if "files_to_touch" not in plan_obj:
+            plan_obj["files_to_touch"] = sorted(list(files))
+        if "test_strategy" not in plan_obj:
+            plan_obj["test_strategy"] = str(test_strategy) if test_strategy else "Ejecutar tests automatizados según test_command."
 
-            for f in (s.get("files_to_modify") or []):
-                files_to_touch.add(str(f))
-            for f in (s.get("files_to_create") or []):
-                files_to_touch.add(str(f))
-
-            if not test_strategy and s.get("tests_strategy"):
-                test_strategy = s["tests_strategy"]
-
-            # carry over risks/assumptions if present inside step
-            if "risks" in s and "risks" not in plan_obj:
-                plan_obj["risks"] = s.get("risks", [])
-            if "assumptions" in s and "assumptions" not in plan_obj:
-                plan_obj["assumptions"] = s.get("assumptions", [])
-
-        plan_obj["tasks"] = plan_obj.get("tasks") or tasks
-        plan_obj["files_to_touch"] = plan_obj.get("files_to_touch") or sorted(files_to_touch)
-        plan_obj["test_strategy"] = plan_obj.get("test_strategy") or test_strategy or "Agregar/ajustar tests y ejecutar el comando de tests indicado."
-
-        # Remove non-schema field
-        plan_obj.pop("steps", None)
-
+    # ensure required keys exist
+    plan_obj.setdefault("assumptions", [])
+    plan_obj.setdefault("risks", [])
+    plan_obj.setdefault("files_to_touch", plan_obj.get("files_to_touch", []))
+    plan_obj.setdefault("tasks", plan_obj.get("tasks", []))
+    plan_obj.setdefault("test_strategy", plan_obj.get("test_strategy", "Ejecutar tests automatizados según test_command."))
     return plan_obj
 
 def normalize_patch(patch_obj: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Supports two model outputs:
-    1) Expected schema: {"patches":[{"path","diff"}], "notes":[...]}
-    2) Alternate: {"files": {"path": {"content": "..."} , ...}, "notes":[...]}
-       -> convert to unified diffs that 'git apply' can consume.
-    """
-    # already correct
-    if isinstance(patch_obj, dict) and "patches" in patch_obj:
-        if "notes" not in patch_obj:
-            patch_obj["notes"] = []
-        return patch_obj
-
     # unwrap common wrapper
     if isinstance(patch_obj, dict) and "patch" in patch_obj and isinstance(patch_obj["patch"], dict):
         patch_obj = patch_obj["patch"]
 
-    # alternate files format
-    if isinstance(patch_obj, dict) and "files" in patch_obj and isinstance(patch_obj["files"], dict):
-        files = patch_obj["files"]
-        notes = patch_obj.get("notes", [])
-
-        patches = []
-        for path, spec in files.items():
-            # support {"content": "..."} or direct string
-            new_content = spec.get("content") if isinstance(spec, dict) else str(spec)
-
-            # read old content if exists
-            try:
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    old_content = f.read()
-                existed = True
-            except FileNotFoundError:
-                old_content = ""
-                existed = False
-
-            # build unified diff with python difflib
-            import difflib
-            old_lines = old_content.splitlines(keepends=True)
-            new_lines = new_content.splitlines(keepends=True)
-
-            a_path = f"a/{path}"
-            b_path = f"b/{path}"
-            fromfile = a_path if existed else "/dev/null"
-            tofile = b_path
-
-            diff = "".join(difflib.unified_diff(
-                old_lines,
-                new_lines,
-                fromfile=fromfile,
-                tofile=tofile,
-                lineterm=""
-            ))
-
-            # difflib returns lines without trailing \n when lineterm="" → normalize
-            if diff and not diff.endswith("\n"):
-                diff += "\n"
-
-            # git apply requires the ---/+++ headers; difflib provides them
-            patches.append({"path": path, "diff": diff})
-
-        return {"patches": patches, "notes": notes if isinstance(notes, list) else []}
-
+    # If model used "files", map into patches? patch_apply supports "files" directly,
+    # but schema requires patches+notes. We'll keep as-is and let repair step fix.
+    if "notes" not in patch_obj:
+        patch_obj["notes"] = []
     return patch_obj
 
-from typing import Dict, Any, List
-
 def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[str, Any]:
-    def _to_text(x: Any, limit: int = 400) -> str:
-        """Convierte cualquier objeto a texto seguro, truncado."""
-        if x is None:
-            return ""
-        if isinstance(x, str):
-            return x[:limit]
-        try:
-            import json
-            return json.dumps(x, ensure_ascii=False)[:limit]
-        except Exception:
-            return str(x)[:limit]
-
     # unwrap common wrapper
     if isinstance(tr, dict) and "test_report" in tr and isinstance(tr["test_report"], dict):
         tr = tr["test_report"]
 
-    # If already in expected shape, still sanitize types (robust)
-    if isinstance(tr, dict) and "passed" in tr and "summary" in tr and "acceptance_criteria_status" in tr:
-        passed_val = bool(tr.get("passed", False))
-        summary_val = _to_text(tr.get("summary"), limit=2000)  # summary puede ser más largo
-        ac_status = tr.get("acceptance_criteria_status")
-
-        # Si viene mal tipeado, lo reconstruimos
-        if not isinstance(ac_status, list):
-            criteria = run_req.get("acceptance_criteria") or []
-            evidence_base = tr.get("criteria_verification") or tr.get("summary") or tr.get("test_summary") or ""
-            ev = _to_text(evidence_base, limit=400)
-            if criteria:
-                ac_status = [{"criterion": c, "met": passed_val, "evidence": ev} for c in criteria]
-            else:
-                ac_status = [{"criterion": "N/A", "met": passed_val, "evidence": ev or summary_val[:400]}]
-        else:
-            # Sanitiza cada elemento
-            cleaned: List[Dict[str, Any]] = []
-            for item in ac_status:
-                if not isinstance(item, dict):
-                    cleaned.append({"criterion": "N/A", "met": passed_val, "evidence": _to_text(item, 400)})
-                    continue
-                cleaned.append({
-                    "criterion": _to_text(item.get("criterion", "N/A"), 200),
-                    "met": bool(item.get("met", passed_val)),
-                    "evidence": _to_text(item.get("evidence", ""), 400),
-                })
-            ac_status = cleaned
-
-        out = {
-            "passed": passed_val,
-            "summary": summary_val,
-            "acceptance_criteria_status": ac_status,
-        }
-        if "recommended_patch" in tr:
-            out["recommended_patch"] = tr["recommended_patch"]
-        return out
+    # already correct
+    if "passed" in tr and "summary" in tr and "acceptance_criteria_status" in tr:
+        return tr
 
     # map common alternative keys
-    if not isinstance(tr, dict):
-        tr = {"test_summary": tr}
-
+    passed = None
     if "tests_passed" in tr:
         passed = bool(tr["tests_passed"])
     elif "passed" in tr:
@@ -258,43 +129,120 @@ def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[s
         passed = False
 
     summary = tr.get("summary") or tr.get("test_summary") or "Resultado de pruebas no especificado."
-    summary_txt = _to_text(summary, limit=2000)
 
-    ac_list: List[Dict[str, Any]] = []
+    ac_list = []
     criteria = run_req.get("acceptance_criteria") or []
     if criteria:
         evidence_base = tr.get("criteria_verification") or tr.get("summary") or tr.get("test_summary") or ""
-        ev = _to_text(evidence_base, limit=400)
+        if not isinstance(evidence_base, str):
+            evidence_base = json.dumps(evidence_base, ensure_ascii=False)
         for c in criteria:
-            ac_list.append({"criterion": _to_text(c, 200), "met": bool(passed), "evidence": ev})
+            ac_list.append({"criterion": str(c), "met": passed, "evidence": evidence_base[:400]})
     else:
-        ac_list = [{"criterion": "N/A", "met": bool(passed), "evidence": summary_txt[:400]}]
+        evid = summary if isinstance(summary, str) else json.dumps(summary, ensure_ascii=False)
+        ac_list = [{"criterion": "N/A", "met": passed, "evidence": evid[:400]}]
 
     out = {
-        "passed": bool(passed),
-        "summary": summary_txt,
+        "passed": passed,
+        "summary": summary if isinstance(summary, str) else json.dumps(summary, ensure_ascii=False),
         "acceptance_criteria_status": ac_list
     }
 
-    # carry recommended_patch if present (and it may need normalize_patch elsewhere)
     if "recommended_patch" in tr:
         out["recommended_patch"] = tr["recommended_patch"]
 
     return out
 
+# ---- Load schemas ----
+RUN_SCHEMA = json.loads(read("schemas/run_request.schema.json"))
+PLAN_SCHEMA = json.loads(read("schemas/plan.schema.json"))
+PATCH_SCHEMA = json.loads(read("schemas/patch.schema.json"))
+TEST_SCHEMA = json.loads(read("schemas/test_report.schema.json"))
+
 def run_cmd(cmd: str) -> Tuple[int, str]:
     p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-    out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
-    return p.returncode, out.strip()
+    return p.returncode, (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
+
+def write_out(rel_path: str, content: str) -> None:
+    out_dir = os.path.join(ROOT, "out")
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, rel_path)
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8", errors="replace") as f:
+        f.write(content if content.endswith("\n") else content + "\n")
+
+def git_diff_name_only() -> str:
+    code, out = run_cmd("git diff --name-only")
+    return out if code == 0 else ""
+
+def git_diff_full() -> str:
+    code, out = run_cmd("git diff")
+    return out if code == 0 else ""
+
+def collect_env_info(stack: str, test_cmd: str) -> Dict[str, Any]:
+    info: Dict[str, Any] = {"stack": stack, "test_command": test_cmd}
+    cmds = {
+        "python_version": "python --version",
+        "pip_version": "python -m pip --version",
+        "cwd": "pwd",
+        "which_pytest": "which pytest || true",
+        "pytest_version": "pytest --version || true",
+        "which_python": "which python || true",
+    }
+    for k, c in cmds.items():
+        _, o = run_cmd(c)
+        info[k] = o
+    if stack == "python-django" or os.path.exists("manage.py"):
+        _, o = run_cmd("ls -la manage.py 2>/dev/null || true")
+        info["manage_py"] = o
+    return info
+
+def error_signature(test_output: str) -> str:
+    if not test_output:
+        return ""
+    lines = test_output.splitlines()
+    tail = "\n".join(lines[-80:])
+    tail = re.sub(r"/home/runner/work/[^\s]+", "<WORKDIR>", tail)
+    tail = re.sub(r"0x[0-9a-fA-F]+", "0x<ADDR>", tail)
+    return tail[:2000]
 
 def compact_memories(mem_matches: List[Dict[str, Any]], max_items: int = 8) -> List[str]:
-    texts = []
+    out = []
     for m in mem_matches[:max_items]:
-        md = m.get("metadata", {})
-        t = md.get("text", "")
-        if t:
-            texts.append(f"- (score={m['score']:.3f}) {t[:800]}")
-    return texts
+        meta = m.get("metadata") or {}
+        txt = meta.get("text") or m.get("text") or ""
+        if txt:
+            out.append(str(txt)[:800])
+    return out
+
+def create_pr_body(issue_number: str, run_req: Dict[str, Any], plan: Dict[str, Any], iteration_notes: List[str], last_test_output: str) -> str:
+    lines = []
+    lines.append(f"### 🤖 Agent Orchestrator — Issue #{issue_number}")
+    lines.append(f"**Stack/Lang:** `{run_req.get('stack','')}` / `{run_req.get('language','')}`")
+    lines.append("")
+    lines.append("**Historia de usuario**")
+    lines.append(f"> {run_req.get('user_story','')}")
+    lines.append("")
+    if run_req.get("acceptance_criteria"):
+        lines.append("**Criterios de aceptación**")
+        for c in run_req["acceptance_criteria"]:
+            lines.append(f"- {c}")
+        lines.append("")
+    lines.append("**Plan (resumen)**")
+    lines.append(plan.get("summary", ""))
+    lines.append("")
+    lines.append("**Resultado de iteraciones**")
+    for n in iteration_notes:
+        lines.append(f"- {n}")
+    lines.append("")
+    if last_test_output:
+        lines.append("Logs (último test output, truncado):")
+        lines.append("```")
+        lines.append(last_test_output[:4000])
+        lines.append("```")
+    return "\n".join(lines)
 
 def main():
     repo = os.environ["REPO"]
@@ -367,45 +315,37 @@ def main():
         schema_name="plan.schema.json",
         temperature=0.2
     )
-    # Normaliza errores comunes (plan wrapper, steps, etc.)
     plan = normalize_plan(plan)
 
     try:
         safe_validate(plan, PLAN_SCHEMA, "plan.schema.json")
-
     except ValueError as e:
-        # 🔁 REPAIR STEP: pedir explícitamente al LLM que repare el JSON
         repair_user = json.dumps(
             {
                 "error": str(e),
                 "invalid_plan": plan,
                 "required_schema": PLAN_SCHEMA,
                 "instructions": (
-                    "Repara el JSON para que cumpla EXACTAMENTE el schema. "
-                    "No agregues wrappers como 'plan'. "
-                    "No incluyas markdown. "
-                    "Devuelve solo el objeto JSON válido."
+                    "Devuelve SOLO JSON válido que cumpla EXACTAMENTE plan.schema.json. "
+                    "Debe incluir summary, tasks (array), files_to_touch (array), test_strategy (string). "
+                    "Sin markdown."
                 )
             },
             ensure_ascii=False
         )
-
         repaired = chat_json(
-            system=orchestrator_sys
-            + "\nEres un formateador estricto. Repara el JSON al schema exacto.",
+            system=orchestrator_sys + "\nEres un formateador estricto. Repara el plan al schema exacto.",
             user=repair_user,
             schema_name="plan.schema.json",
             temperature=0.0
         )
-
         repaired = normalize_plan(repaired)
         safe_validate(repaired, PLAN_SCHEMA, "plan.schema.json")
         plan = repaired
 
-    # Persist plan to memory
     upsert_texts(repo, issue_number, [{
         "id": f"plan_{uuid.uuid4().hex}",
-        "text": f"PLAN: {plan.get('summary','')}\nTEST: {plan.get('test_strategy','')}",
+        "text": f"PLAN: {plan.get('summary','')}",
         "metadata": {"type": "plan", "text": f"{plan}"}
     }])
 
@@ -417,13 +357,18 @@ def main():
     test_cmd = run_req.get("test_command", "pytest -q")
     max_iter = int(run_req.get("max_iterations", 2))
 
+    env_info = collect_env_info(run_req.get("stack", ""), test_cmd)
+    write_out("env_info.json", json.dumps(env_info, ensure_ascii=False, indent=2))
+
+    prev_failure_bundle: Dict[str, Any] = {}
+    seen_signatures: List[str] = []
+    stuck_count = 0
+
     last_test_output = ""
     final_test_exit = 999  # 0 = tests OK
     pr_url = None
 
     for i in range(1, max_iter + 1):
-        # Refresh focused snapshot (optional: could include more files after changes)
-        # Keep it light for prompt size
         repo_snap = snapshot(key_candidates)
 
         # ----- IMPLEMENT AGENT -----
@@ -435,7 +380,9 @@ def main():
             "repo_snapshot_files": list(repo_snap.keys()),
             "repo_snapshot": repo_snap,
             "memories": memories,
-            "previous_test_output": last_test_output
+            "previous_test_output": last_test_output,
+            "previous_failure_bundle": prev_failure_bundle,
+            "env_info": env_info
         }, ensure_ascii=False)
 
         patch_obj = chat_json(
@@ -449,7 +396,6 @@ def main():
         try:
             safe_validate(patch_obj, PATCH_SCHEMA, "patch.schema.json")
         except ValueError as e:
-            # (opcional) reparo automático: re-preguntar al LLM
             repair_user = json.dumps(
                 {
                     "error": str(e),
@@ -476,11 +422,52 @@ def main():
 
         apply_patch_object(patch_obj)
 
+        # Artefactos del patch aplicado (antes de tests)
+        changed_files = git_diff_name_only()
+        diff_text = git_diff_full()
+        write_out(f"iterations/iter_{i}_changed_files.txt", changed_files)
+        write_out(f"iterations/iter_{i}_diff.patch", diff_text)
+        notes_val = patch_obj.get("notes", [])
+        if isinstance(notes_val, list):
+            write_out(f"iterations/iter_{i}_patch_notes.txt", "\n".join([str(x) for x in notes_val]))
+        else:
+            write_out(f"iterations/iter_{i}_patch_notes.txt", str(notes_val))
+
         # Run tests
         code, out = run_cmd(test_cmd)
         final_test_exit = code
+        write_out(f"iterations/iter_{i}_test_output.txt", out)
+
+        # Firma para stuck detection (mismo error repetido)
+        sig = error_signature(out)
+        if sig and seen_signatures and sig == seen_signatures[-1]:
+            stuck_count += 1
+        else:
+            stuck_count = 0
+        seen_signatures.append(sig)
+
+        # Failure bundle (alta fidelidad) para próxima iteración
+        if code != 0:
+            prev_failure_bundle = {
+                "iteration": i,
+                "exit_code": code,
+                "test_command": test_cmd,
+                "test_output_tail": out[-20000:],
+                "changed_files": changed_files.splitlines()[-200:],
+                "diff_patch_tail": diff_text[-20000:],
+                "patch_notes": patch_obj.get("notes", []),
+                "env_info": env_info,
+            }
+            write_out(f"iterations/iter_{i}_failure_bundle.json", json.dumps(prev_failure_bundle, ensure_ascii=False, indent=2))
+        else:
+            prev_failure_bundle = {}
+
+        # corta loop si está atascado (mismo error 3 veces seguidas)
+        if stuck_count >= 2:
+            iteration_notes.append(f"Iteración {i}: atasco detectado (mismo error repetido). Se detiene el loop.")
+            break
+
         if "pytest: not found" in out or "/bin/sh: 1: pytest: not found" in out:
-            # reporta en formato schema y salta test agent
             test_report = {
                 "passed": False,
                 "summary": "No se pudieron ejecutar tests: pytest no está instalado en el runner. Instala pytest o ajusta test_command.",
@@ -488,13 +475,10 @@ def main():
                     {"criterion": c, "met": False, "evidence": "pytest no disponible"} for c in (run_req.get("acceptance_criteria") or ["Incluir test unitarios"])
                 ]
             }
-            # y opcionalmente: break o continuar a repair
 
         last_test_output = out
-
         iteration_notes.append(f"Iteración {i}: test exit={code}")
 
-        # Persist patch + tests to memory
         upsert_texts(repo, issue_number, [{
             "id": f"iter_{i}_{uuid.uuid4().hex}",
             "text": f"ITER {i}: applied patch + test exit={code}",
@@ -517,6 +501,9 @@ def main():
             "plan": plan,
             "patch_notes": patch_obj.get("notes", []),
             "test_output": out,
+            "changed_files": changed_files.splitlines(),
+            "diff_patch": diff_text,
+            "env_info": env_info,
             "repo_snapshot_files": list(repo_snap.keys()),
             "repo_snapshot": repo_snap
         }, ensure_ascii=False)
@@ -556,9 +543,7 @@ def main():
             safe_validate(repaired, TEST_SCHEMA, "test_report.schema.json")
             test_report = repaired
 
-
         if test_report.get("recommended_patch"):
-            # apply recommended patch and re-run tests once within same iteration
             apply_patch_object(test_report["recommended_patch"])
             code2, out2 = run_cmd(test_cmd)
             final_test_exit = code2
@@ -604,35 +589,27 @@ def main():
     if not changed:
         summary_lines.append("⚠️ No se detectaron cambios en el working tree. Revisa si el patch fue vacío.")
     else:
-        # Persist branch always (so changes aren't lost)
         git_commit_all(f"agent: implement issue #{issue_number}")
-        git_push(branch)
+        git_push(current_branch())
 
-        tests_ok = (final_test_exit == 0)
-        if not tests_ok:
-            summary_lines.append(f"⚠️ Tests no pasaron (exit={final_test_exit}). No se creará PR. Branch: `{branch}`")
-        else:
-            pr_body = (
-                "\n".join(summary_lines)
-                + "\n\n"
-                + "Logs (último test output, truncado):\n"
-                + "```text\n"
-                + (last_test_output[:4000] if last_test_output else "")
-                + "\n```"
-            )
+        if final_test_exit == 0:
+            title = f"[agent] Issue #{issue_number}: {issue_title or run_req.get('user_story','')[:60]}"
+            body = create_pr_body(issue_number, run_req, plan, iteration_notes, last_test_output)
             try:
-                pr_url = gh_pr_create(
-                    title=f"[agent] Issue #{issue_number}: {issue_title[:80]}",
-                    body=pr_body,
-                    head=branch,
-                    base="main"
-                )
+                pr_url = gh_pr_create(title=title, body=body, head=current_branch(), base="main")
                 summary_lines.append(f"✅ PR creado: {pr_url}")
             except Exception as e:
-                summary_lines.append(f"⚠️ No se pudo crear PR automáticamente: {e}. Branch: `{branch}`")
+                summary_lines.append(f"⚠️ No se pudo crear PR automáticamente: {e}")
+        else:
+            summary_lines.append("⚠️ Tests no pasaron; no se crea PR automáticamente. Revisa artefactos agent/out.")
+
+    # Inform if max_iterations was clamped
+    if requested_max_iterations is not None and int(run_req.get("max_iterations", 2)) != int(requested_max_iterations):
+        summary_lines.append("")
+        summary_lines.append(f"ℹ️ max_iterations solicitado={requested_max_iterations} fue ajustado a {run_req.get('max_iterations')} por schema.")
 
     with open(os.path.join(ROOT, "out", "summary.md"), "w", encoding="utf-8") as f:
-        f.write("\n".join(summary_lines).strip())
+        f.write("\n".join(summary_lines) + "\n")
 
 if __name__ == "__main__":
     main()
