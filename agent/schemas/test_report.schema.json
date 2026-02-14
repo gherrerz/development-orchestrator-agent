@@ -19,7 +19,31 @@
         "additionalProperties": false
       }
     },
-    "recommended_patch": { "$ref": "patch.schema.json" }
+    "recommended_patch": {
+      "title": "Patch",
+      "type": "object",
+      "required": ["patches", "notes"],
+      "properties": {
+        "patches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "diff"],
+            "properties": {
+              "path": { "type": "string" },
+              "diff": { "type": "string", "minLength": 10 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }
