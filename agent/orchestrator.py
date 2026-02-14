@@ -16,6 +16,10 @@ from agent.tools.github_tools import (
 from agent.tools.repo_introspect import list_files, snapshot
 from agent.tools.patch_apply import apply_patch_object
 
+from agent.tools.pinecone_memory import upsert_texts, query as pine_query
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+
 # --- Stack catalog defaults (language/test_command) ---
 def _load_stack_catalog() -> dict:
     try:
@@ -41,10 +45,6 @@ def apply_stack_defaults(run_req: dict) -> dict:
     if (not run_req.get("test_command")) and spec.get("test_command"):
         run_req["test_command"] = spec["test_command"]
     return run_req
-
-from agent.tools.pinecone_memory import upsert_texts, query as pine_query
-
-ROOT = os.path.dirname(os.path.abspath(__file__))
 
 def read(path: str) -> str:
     with open(os.path.join(ROOT, path), "r", encoding="utf-8") as f:
@@ -103,9 +103,6 @@ def normalize_patch(patch_obj: Dict[str, Any]) -> Dict[str, Any]:
     # unwrap common wrapper
     if isinstance(patch_obj, dict) and "patch" in patch_obj and isinstance(patch_obj["patch"], dict):
         patch_obj = patch_obj["patch"]
-
-    # If model used "files", map into patches? patch_apply supports "files" directly,
-    # but schema requires patches+notes. We'll keep as-is and let repair step fix.
     if "notes" not in patch_obj:
         patch_obj["notes"] = []
     return patch_obj
@@ -120,7 +117,6 @@ def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[s
         return tr
 
     # map common alternative keys
-    passed = None
     if "tests_passed" in tr:
         passed = bool(tr["tests_passed"])
     elif "passed" in tr:
@@ -209,21 +205,10 @@ def error_signature(test_output: str) -> str:
     return tail[:2000]
 
 def classify_failure(test_output: str) -> Dict[str, Any]:
-    """
-    Clasifica fallos típicos para que el implementador tenga pistas precisas.
-    Devuelve:
-      {
-        "kind": "...",
-        "hints": [ "...", ... ],
-        "fingerprint": "..."
-      }
-    """
     out = test_output or ""
     hints: List[str] = []
     kind = "unknown"
 
-    # 1) Float precision mismatch (assert exact equality)
-    # Ej: "2318.5481486000003 == 2318.55"
     float_mismatch = (
         re.search(r"\b\d+\.\d{6,}\b", out) and
         ("assert" in out) and
@@ -237,7 +222,6 @@ def classify_failure(test_output: str) -> Dict[str, Any]:
             "y en tests usar pytest.approx o comparar contra round(...,2)."
         )
 
-    # 2) Missing dependency (common)
     if "ModuleNotFoundError" in out or "ImportError" in out:
         if "No module named" in out:
             kind = "missing_dependency"
@@ -246,12 +230,10 @@ def classify_failure(test_output: str) -> Dict[str, Any]:
                 "y agrégalo a requirements.txt / pyproject.toml, o al stack catalog."
             )
 
-    # 3) Pytest not installed
     if "pytest: not found" in out or "/bin/sh: 1: pytest: not found" in out:
         kind = "missing_pytest"
         hints.append("pytest no está disponible. Instalar pytest o ajustar test_command.")
 
-    # fingerprint: firma reducida por tipo + extracto estable del error
     stable = error_signature(out)
     fp = f"{kind}|{stable[:800]}"
 
@@ -307,7 +289,7 @@ def main():
 
     # --- Robustez: clamp max_iterations al rango permitido por el schema ---
     orig_mi = run_req.get("max_iterations", None)
-    requested_max_iterations = orig_mi  # <-- guarda en variable, NO en run_req
+    requested_max_iterations = orig_mi  # NO meter en run_req (schema strict)
 
     try:
         mi = int(orig_mi) if orig_mi is not None else int(
@@ -330,23 +312,19 @@ def main():
 
     safe_validate(run_req, RUN_SCHEMA, "run_request.schema.json")
 
-    # Build initial query for memory
     mem_query_text = f"{run_req['stack']} | {run_req['language']} | {run_req['user_story']} | {issue_title}"
     mem_matches = pine_query(repo, issue_number, mem_query_text, top_k=8)
     memories = compact_memories(mem_matches)
 
-    # Repo snapshot: take a focused sample of key files
     files = list_files(".")
     key_candidates = [p for p in files if any(p.endswith(suf) for suf in [
         "pyproject.toml", "requirements.txt", "setup.cfg", "setup.py", "README.md",
         "Makefile", "pytest.ini", "tox.ini", "ruff.toml"
     ])]
-    # include top-level python packages and tests
     key_candidates += [p for p in files if p.startswith("./tests") or p.endswith("__init__.py")]
-    key_candidates = list(dict.fromkeys(key_candidates))[:40]  # unique + cap
+    key_candidates = list(dict.fromkeys(key_candidates))[:40]
     repo_snap = snapshot(key_candidates)
 
-    # ----- DESIGN AGENT -----
     orchestrator_sys = read("prompts/orchestrator_system.md")
     design_prompt = read("prompts/design_agent.md")
 
@@ -398,7 +376,6 @@ def main():
         "metadata": {"type": "plan", "text": f"{plan}"}
     }])
 
-    # Create branch
     branch = f"agent/issue-{issue_number}-{uuid.uuid4().hex[:8]}"
     create_branch(branch)
 
@@ -414,13 +391,12 @@ def main():
     stuck_count = 0
 
     last_test_output = ""
-    final_test_exit = 999  # 0 = tests OK
+    final_test_exit = 999
     pr_url = None
 
     for i in range(1, max_iter + 1):
         repo_snap = snapshot(key_candidates)
 
-        # ----- IMPLEMENT AGENT -----
         impl_prompt = read("prompts/implement_agent.md")
         impl_user = json.dumps({
             "iteration": i,
@@ -431,7 +407,6 @@ def main():
             "memories": memories,
             "previous_test_output": last_test_output,
             "previous_failure_bundle": prev_failure_bundle,
-            # accesos directos a hints (importante para LLM)
             "failure_kind": (prev_failure_bundle.get("failure_kind") if isinstance(prev_failure_bundle, dict) else None),
             "hints": (prev_failure_bundle.get("hints") if isinstance(prev_failure_bundle, dict) else []),
             "env_info": env_info
@@ -474,7 +449,6 @@ def main():
 
         apply_patch_object(patch_obj)
 
-        # Artefactos del patch aplicado (antes de tests)
         changed_files = git_diff_name_only()
         diff_text = git_diff_full()
         write_out(f"iterations/iter_{i}_changed_files.txt", changed_files)
@@ -490,66 +464,49 @@ def main():
         final_test_exit = code
         write_out(f"iterations/iter_{i}_test_output.txt", out)
 
-        # Firma para stuck detection (mismo error repetido)
+        # stuck detection por fingerprint
         failure_meta = classify_failure(out)
         fp = failure_meta["fingerprint"]
 
-        # stuck detection por fingerprint (mejor que tail crudo)
         if fp and seen_signatures and fp == seen_signatures[-1]:
             stuck_count += 1
         else:
             stuck_count = 0
         seen_signatures.append(fp)
 
-        # Allow extra retries for trivial categories
         kind = failure_meta["kind"]
-        stuck_threshold = 2  # default: 3 occurrences total (0,1,2)
+        stuck_threshold = 2
         if kind in ("float_precision_mismatch",):
-            stuck_threshold = 4  # permite 5 ocurrencias (más margen)
+            stuck_threshold = 4
         elif kind in ("missing_dependency", "missing_pytest"):
-            stuck_threshold = 3  # margen medio
+            stuck_threshold = 3
 
         if stuck_count >= stuck_threshold:
-            iteration_notes.append(
-                f"Iteración {i}: atasco detectado (kind={kind}). Se detiene el loop."
-            )
+            iteration_notes.append(f"Iteración {i}: atasco detectado (kind={kind}). Se detiene el loop.")
             break
 
         # Failure bundle (alta fidelidad) para próxima iteración
         if code != 0:
-        failure_meta = classify_failure(out)
-
-        prev_failure_bundle = {
-            "iteration": i,
-            "exit_code": code,
-            "test_command": test_cmd,
-            # stacktrace grande (alta fidelidad)
-            "test_output_tail": out[-60000:],   # sube de 20k -> 60k
-            "test_output_head": out[:8000],     # a veces el contexto está al inicio
-            "changed_files": changed_files.splitlines()[-400:],
-            "diff_patch_tail": diff_text[-60000:],
-            "patch_notes": patch_obj.get("notes", []),
-            "env_info": env_info,
-            # hints y clasificación
-            "failure_kind": failure_meta["kind"],
-            "hints": failure_meta["hints"],
-            "fingerprint": failure_meta["fingerprint"],
-        }
-        write_out(
-            f"iterations/iter_{i}_failure_bundle.json",
-            json.dumps(prev_failure_bundle, ensure_ascii=False, indent=2)
-        )
+            prev_failure_bundle = {
+                "iteration": i,
+                "exit_code": code,
+                "test_command": test_cmd,
+                "test_output_tail": out[-60000:],
+                "test_output_head": out[:8000],
+                "changed_files": changed_files.splitlines()[-400:],
+                "diff_patch_tail": diff_text[-60000:],
+                "patch_notes": patch_obj.get("notes", []),
+                "env_info": env_info,
+                "failure_kind": failure_meta["kind"],
+                "hints": failure_meta["hints"],
+                "fingerprint": failure_meta["fingerprint"],
+            }
+            write_out(
+                f"iterations/iter_{i}_failure_bundle.json",
+                json.dumps(prev_failure_bundle, ensure_ascii=False, indent=2)
+            )
         else:
             prev_failure_bundle = {}
-
-        if "pytest: not found" in out or "/bin/sh: 1: pytest: not found" in out:
-            test_report = {
-                "passed": False,
-                "summary": "No se pudieron ejecutar tests: pytest no está instalado en el runner. Instala pytest o ajusta test_command.",
-                "acceptance_criteria_status": [
-                    {"criterion": c, "met": False, "evidence": "pytest no disponible"} for c in (run_req.get("acceptance_criteria") or ["Incluir test unitarios"])
-                ]
-            }
 
         last_test_output = out
         iteration_notes.append(f"Iteración {i}: test exit={code}")
@@ -568,7 +525,12 @@ def main():
         if code == 0:
             break
 
-        # ----- TEST AGENT (diagnose and propose fix) -----
+        # Si no hay pytest, no gastes tokens en LLM y deja artefacto claro
+        if kind == "missing_pytest":
+            write_out(f"iterations/iter_{i}_tester_hint.txt", "\n".join(failure_meta["hints"]))
+            continue
+
+        # ----- TEST AGENT -----
         test_prompt = read("prompts/test_agent.md")
         test_user = json.dumps({
             "iteration": i,
@@ -593,10 +555,9 @@ def main():
         test_report = normalize_test_report(test_report, run_req)
 
         # Auto-inject hint into test_report.summary if classifier found a known issue
-        meta = classify_failure(test_user_data.get("test_output","") if False else out)  # usa `out` del loop
-        if meta["hints"]:
-            hint_block = " | ".join(meta["hints"][:2])
-            if "HINT:" not in test_report.get("summary",""):
+        if failure_meta["hints"]:
+            hint_block = " | ".join(failure_meta["hints"][:2])
+            if "HINT:" not in (test_report.get("summary", "") or ""):
                 test_report["summary"] = f"{test_report.get('summary','')}\nHINT: {hint_block}".strip()
 
         try:
@@ -643,7 +604,6 @@ def main():
             if code2 == 0:
                 break
 
-    # If changes exist, commit + push + PR
     changed = git_status_porcelain().strip()
     os.makedirs(os.path.join(ROOT, "out"), exist_ok=True)
 
@@ -685,7 +645,6 @@ def main():
         else:
             summary_lines.append("⚠️ Tests no pasaron; no se crea PR automáticamente. Revisa artefactos agent/out.")
 
-    # Inform if max_iterations was clamped
     if requested_max_iterations is not None and int(run_req.get("max_iterations", 2)) != int(requested_max_iterations):
         summary_lines.append("")
         summary_lines.append(f"ℹ️ max_iterations solicitado={requested_max_iterations} fue ajustado a {run_req.get('max_iterations')} por schema.")
