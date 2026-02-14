@@ -128,31 +128,33 @@ jobs:
 
           # Stack catalog reinforcement (best-effort)
           if [ -f agent/stacks/catalog.yml ]; then
-            python - <<'PY'
-            import os
-            try:
-              import yaml
-            except Exception:
-              print("::warning::PyYAML not available; skipping catalog extras.")
-              raise SystemExit(0)
+            python -m pip install pyyaml || true
 
-            stack = (os.environ.get("STACK") or "").strip()
-            if not stack:
-              raise SystemExit(0)
+            python - <<'PY' > /tmp/stack_deps.sh
+          import os
+          try:
+            import yaml
+          except Exception:
+            print("::warning::PyYAML not available; skipping catalog extras.")
+            raise SystemExit(0)
 
-            with open("agent/stacks/catalog.yml","r",encoding="utf-8") as f:
-              catalog = yaml.safe_load(f) or {}
+          stack = (os.environ.get("STACK") or "").strip()
+          if not stack:
+            raise SystemExit(0)
 
-            spec = catalog.get(stack) or {}
-            deps = spec.get("deps", {}) or {}
-            pip_deps = deps.get("pip", []) or []
-            npm_deps = deps.get("npm", []) or []
+          with open("agent/stacks/catalog.yml","r",encoding="utf-8") as f:
+            catalog = yaml.safe_load(f) or {}
 
-            if pip_deps:
-              print("python -m pip install " + " ".join(pip_deps))
-            if npm_deps:
-              print("npm install " + " ".join(npm_deps))
-            PY > /tmp/stack_deps.sh
+          spec = catalog.get(stack) or {}
+          deps = spec.get("deps", {}) or {}
+          pip_deps = deps.get("pip", []) or []
+          npm_deps = deps.get("npm", []) or []
+
+          if pip_deps:
+            print("python -m pip install " + " ".join(pip_deps))
+          if npm_deps:
+            print("npm install " + " ".join(npm_deps))
+          PY
 
             if [ -s /tmp/stack_deps.sh ]; then
               echo "== catalog extras =="
