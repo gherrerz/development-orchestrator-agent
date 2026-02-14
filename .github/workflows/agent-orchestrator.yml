@@ -165,27 +165,27 @@ jobs:
 
           # Minimal safety nets for common stacks (if repo didn't declare deps yet)
           if [ "$STACK" = "python-django" ]; then
-            python - <<'PY'
-            import importlib.util
-            missing=[]
-            for pkg in ["django","pytest_django"]:
+            cmd=$(python -c 'import importlib.util
+          missing=[]
+          for pkg in ["django","pytest_django"]:
               if importlib.util.find_spec(pkg) is None:
-                missing.append(pkg)
-            if missing:
-              print("python -m pip install django pytest-django")
-            PY | bash
+                  missing.append(pkg)
+          print("python -m pip install django pytest-django" if missing else "")')
+            if [ -n "$cmd" ]; then
+              bash -lc "$cmd"
+            fi
           fi
 
           if [ "$STACK" = "python-fastapi-postgres" ]; then
-            python - <<'PY'
-            import importlib.util
-            missing=[]
-            for pkg in ["fastapi"]:
+            cmd=$(python -c 'import importlib.util
+          missing=[]
+          for pkg in ["fastapi"]:
               if importlib.util.find_spec(pkg) is None:
-                missing.append(pkg)
-            if missing:
-              print("python -m pip install fastapi 'uvicorn[standard]' httpx")
-            PY | bash
+                  missing.append(pkg)
+          print("python -m pip install fastapi \"uvicorn[standard]\" httpx" if missing else "")')
+            if [ -n "$cmd" ]; then
+              bash -lc "$cmd"
+            fi
           fi
 
       # ---------- Run orchestrator ----------
