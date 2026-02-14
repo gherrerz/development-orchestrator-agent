@@ -1,0 +1,26 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+____________________________ test_calcular_credito _____________________________
+
+    def test_calcular_credito():
+        from agent.calculator import calcular_credito
+>       assert abs(calcular_credito(1000, 5, 2) - 1102.5) < 0.01
+E       assert 2.5 < 0.01
+E        +  where 2.5 = abs((1100.0 - 1102.5))
+E        +    where 1100.0 = <function calcular_credito at 0x7fe69733dd00>(1000, 5, 2)
+
+tests/test_calculator.py:3: AssertionError
+________________________ test_calcular_credito_invalido ________________________
+
+    def test_calcular_credito_invalido():
+>       assert calcular_credito(-1000, 5, 2) == "Error"
+               ^^^^^^^^^^^^^^^^
+E       NameError: name 'calcular_credito' is not defined
+
+tests/test_calculator.py:6: NameError
+=========================== short test summary info ============================
+FAILED tests/test_calculator.py::test_calcular_credito - assert 2.5 < 0.01
+ +  where 2.5 = abs((1100.0 - 1102.5))
+ +    where 1100.0 = <function calcular_credito at 0x7fe69733dd00>(1000, 5, 2)
+FAILED tests/test_calculator.py::test_calcular_credito_invalido - NameError: name 'calcular_credito' is not defined
+2 failed in 0.04s
