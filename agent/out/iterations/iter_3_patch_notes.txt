@@ -1,0 +1,1 @@
+Se ha creado un módulo para calcular créditos y se han agregado pruebas unitarias para verificar su funcionamiento.
