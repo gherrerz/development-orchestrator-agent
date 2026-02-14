@@ -1,0 +1,1 @@
+Se ha implementado la función 'calcular_credito' en 'calculator.py' y se han agregado pruebas unitarias en 'test_calculator.py'.
