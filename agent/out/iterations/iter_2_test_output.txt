@@ -1,0 +1,15 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________________________ test_calculate_credit _____________________________
+
+    def test_calculate_credit():
+        assert calculate_credit(1000, 0.05, 2) == 1102.5
+>       assert calculate_credit(2000, 0.03, 5) == 2318.55
+E       assert 2318.5481486000003 == 2318.55
+E        +  where 2318.5481486000003 = calculate_credit(2000, 0.03, 5)
+
+tests/test_credit_calculator.py:6: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_credit_calculator.py::test_calculate_credit - assert 2318.5481486000003 == 2318.55
+ +  where 2318.5481486000003 = calculate_credit(2000, 0.03, 5)
+1 failed in 0.02s
