@@ -22,3 +22,7 @@ Guías:
   - Solo si puedes entregar un diff unificado pequeño y válido (headers --- a/... +++ b/... y al menos un hunk @@).
   - Enfócate en correcciones que hagan correr los tests y/o arreglen el fallo más determinante.
 - No uses markdown. Devuelve SOLO JSON válido.
+Detección específica (float mismatch):
+- Si el output contiene números con muchos decimales y asserts con "==", concluye "float precision mismatch".
+- En summary incluye un "HINT:" explícito con 1) usar Decimal+quantize o round(x,2) en lógica y 2) pytest.approx en tests.
+- En acceptance_criteria_status[].evidence incluye el fragmento exacto del assert/valor esperado/obtenido.

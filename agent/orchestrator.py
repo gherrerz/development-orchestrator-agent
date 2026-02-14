@@ -208,6 +208,55 @@ def error_signature(test_output: str) -> str:
     tail = re.sub(r"0x[0-9a-fA-F]+", "0x<ADDR>", tail)
     return tail[:2000]
 
+def classify_failure(test_output: str) -> Dict[str, Any]:
+    """
+    Clasifica fallos típicos para que el implementador tenga pistas precisas.
+    Devuelve:
+      {
+        "kind": "...",
+        "hints": [ "...", ... ],
+        "fingerprint": "..."
+      }
+    """
+    out = test_output or ""
+    hints: List[str] = []
+    kind = "unknown"
+
+    # 1) Float precision mismatch (assert exact equality)
+    # Ej: "2318.5481486000003 == 2318.55"
+    float_mismatch = (
+        re.search(r"\b\d+\.\d{6,}\b", out) and
+        ("assert" in out) and
+        ("==" in out)
+    )
+    if float_mismatch:
+        kind = "float_precision_mismatch"
+        hints.append(
+            "Parece mismatch de precisión float en asserts (igualdad exacta). "
+            "Solución: redondear a 2 decimales (money) usando Decimal+quantize o round(x,2), "
+            "y en tests usar pytest.approx o comparar contra round(...,2)."
+        )
+
+    # 2) Missing dependency (common)
+    if "ModuleNotFoundError" in out or "ImportError" in out:
+        if "No module named" in out:
+            kind = "missing_dependency"
+            hints.append(
+                "Fallo por dependencia faltante. Identifica el módulo exacto en el traceback "
+                "y agrégalo a requirements.txt / pyproject.toml, o al stack catalog."
+            )
+
+    # 3) Pytest not installed
+    if "pytest: not found" in out or "/bin/sh: 1: pytest: not found" in out:
+        kind = "missing_pytest"
+        hints.append("pytest no está disponible. Instalar pytest o ajustar test_command.")
+
+    # fingerprint: firma reducida por tipo + extracto estable del error
+    stable = error_signature(out)
+    fp = f"{kind}|{stable[:800]}"
+
+    return {"kind": kind, "hints": hints, "fingerprint": fp}
+
 def compact_memories(mem_matches: List[Dict[str, Any]], max_items: int = 8) -> List[str]:
     out = []
     for m in mem_matches[:max_items]:
@@ -382,6 +431,9 @@ def main():
             "memories": memories,
             "previous_test_output": last_test_output,
             "previous_failure_bundle": prev_failure_bundle,
+            # accesos directos a hints (importante para LLM)
+            "failure_kind": (prev_failure_bundle.get("failure_kind") if isinstance(prev_failure_bundle, dict) else None),
+            "hints": (prev_failure_bundle.get("hints") if isinstance(prev_failure_bundle, dict) else []),
             "env_info": env_info
         }, ensure_ascii=False)
 
@@ -439,33 +491,56 @@ def main():
         write_out(f"iterations/iter_{i}_test_output.txt", out)
 
         # Firma para stuck detection (mismo error repetido)
-        sig = error_signature(out)
-        if sig and seen_signatures and sig == seen_signatures[-1]:
+        failure_meta = classify_failure(out)
+        fp = failure_meta["fingerprint"]
+
+        # stuck detection por fingerprint (mejor que tail crudo)
+        if fp and seen_signatures and fp == seen_signatures[-1]:
             stuck_count += 1
         else:
             stuck_count = 0
-        seen_signatures.append(sig)
+        seen_signatures.append(fp)
+
+        # Allow extra retries for trivial categories
+        kind = failure_meta["kind"]
+        stuck_threshold = 2  # default: 3 occurrences total (0,1,2)
+        if kind in ("float_precision_mismatch",):
+            stuck_threshold = 4  # permite 5 ocurrencias (más margen)
+        elif kind in ("missing_dependency", "missing_pytest"):
+            stuck_threshold = 3  # margen medio
+
+        if stuck_count >= stuck_threshold:
+            iteration_notes.append(
+                f"Iteración {i}: atasco detectado (kind={kind}). Se detiene el loop."
+            )
+            break
 
         # Failure bundle (alta fidelidad) para próxima iteración
         if code != 0:
-            prev_failure_bundle = {
-                "iteration": i,
-                "exit_code": code,
-                "test_command": test_cmd,
-                "test_output_tail": out[-20000:],
-                "changed_files": changed_files.splitlines()[-200:],
-                "diff_patch_tail": diff_text[-20000:],
-                "patch_notes": patch_obj.get("notes", []),
-                "env_info": env_info,
-            }
-            write_out(f"iterations/iter_{i}_failure_bundle.json", json.dumps(prev_failure_bundle, ensure_ascii=False, indent=2))
+        failure_meta = classify_failure(out)
+
+        prev_failure_bundle = {
+            "iteration": i,
+            "exit_code": code,
+            "test_command": test_cmd,
+            # stacktrace grande (alta fidelidad)
+            "test_output_tail": out[-60000:],   # sube de 20k -> 60k
+            "test_output_head": out[:8000],     # a veces el contexto está al inicio
+            "changed_files": changed_files.splitlines()[-400:],
+            "diff_patch_tail": diff_text[-60000:],
+            "patch_notes": patch_obj.get("notes", []),
+            "env_info": env_info,
+            # hints y clasificación
+            "failure_kind": failure_meta["kind"],
+            "hints": failure_meta["hints"],
+            "fingerprint": failure_meta["fingerprint"],
+        }
+        write_out(
+            f"iterations/iter_{i}_failure_bundle.json",
+            json.dumps(prev_failure_bundle, ensure_ascii=False, indent=2)
+        )
         else:
             prev_failure_bundle = {}
-
-        # corta loop si está atascado (mismo error 3 veces seguidas)
-        if stuck_count >= 2:
-            iteration_notes.append(f"Iteración {i}: atasco detectado (mismo error repetido). Se detiene el loop.")
-            break
 
         if "pytest: not found" in out or "/bin/sh: 1: pytest: not found" in out:
             test_report = {
@@ -516,6 +591,13 @@ def main():
         )
 
         test_report = normalize_test_report(test_report, run_req)
+
+        # Auto-inject hint into test_report.summary if classifier found a known issue
+        meta = classify_failure(test_user_data.get("test_output","") if False else out)  # usa `out` del loop
+        if meta["hints"]:
+            hint_block = " | ".join(meta["hints"][:2])
+            if "HINT:" not in test_report.get("summary",""):
+                test_report["summary"] = f"{test_report.get('summary','')}\nHINT: {hint_block}".strip()
 
         try:
             safe_validate(test_report, TEST_SCHEMA, "test_report.schema.json")

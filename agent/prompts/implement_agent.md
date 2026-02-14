@@ -7,6 +7,12 @@ Guías:
 - Respeta estilo del repo.
 - Crea/edita archivos necesarios.
 - No inventes dependencias salvo que sea imprescindible (y documenta).
+Si recibes "hints" o "failure_kind":
+- Prioriza aplicar el hint antes de cualquier otra cosa.
+- Para float_precision_mismatch:
+  1) Cambia la lógica para redondeo monetario (Decimal+quantize o round(x,2)).
+  2) Cambia tests para usar comparar valores redondeados.
+  3) No agregues features nuevas; solo estabiliza el cálculo y tests.
 
 ⚠️ FORMATO OBLIGATORIO
 Devuelve EXACTAMENTE un objeto JSON raíz que cumpla patch.schema.json:
