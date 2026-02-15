@@ -1,0 +1,91 @@
+# agent/tools/failure_hints_rules.yml
+version: 1
+
+# Reglas genéricas multi-stack. Se evalúan en orden.
+# La primera regla que matchée puede devolver inmediatamente si stop_on_match=true.
+rules:
+  - id: float_precision_generic
+    kind: float_precision_mismatch
+    priority: 10
+    stop_on_match: true
+    patterns:
+      - "(?i)Expected:.*\\d+\\.\\d+.*Received:.*\\d+\\.\\d+"
+      - "(?i)expected.*\\d+\\.\\d+.*but.*\\d+\\.\\d+"
+      - "(?i)\\d+\\.\\d+\\s*!=\\s*\\d+\\.\\d+"
+      - "(?i)AssertionError:.*\\d+\\.\\d+.*\\d+\\.\\d+"
+    hints:
+      - "Posible mismatch de precisión (float). Evita comparar igualdad exacta."
+      - "Preferir comparación con tolerancia (delta/epsilon) o asserts 'close'."
+
+  - id: missing_python_module
+    kind: missing_module
+    priority: 20
+    stop_on_match: true
+    patterns:
+      - "ModuleNotFoundError"
+      - "No module named"
+    hints:
+      - "Python: faltan deps o packaging. Instala requirements/pyproject y valida PYTHONPATH."
+      - "Asegura __init__.py donde corresponda y paths/imports relativos."
+
+  - id: missing_node_module
+    kind: missing_module
+    priority: 30
+    stop_on_match: true
+    patterns:
+      - "Cannot find module"
+      - "ERR_MODULE_NOT_FOUND"
+    hints:
+      - "Node: falta dependencia o path. Ejecuta npm ci/npm install."
+      - "Valida imports relativos y que package.json tenga scripts correctos."
+
+  - id: runner_missing_pytest
+    kind: runner_missing
+    priority: 40
+    stop_on_match: true
+    patterns:
+      - "pytest: not found"
+      - "No module named pytest"
+    hints:
+      - "Instala pytest (python -m pip install pytest) o agrega a deps del stack."
+
+  - id: java_build_failure
+    kind: build_failure
+    priority: 50
+    stop_on_match: true
+    patterns:
+      - "BUILD FAILURE"
+      - "Could not resolve dependencies"
+      - "Could not find artifact"
+    hints:
+      - "Java: fallo de dependencias. Revisa pom.xml/repositorios/credenciales."
+      - "Intenta mvn -U -q test para refrescar dependencias."
+
+  - id: dotnet_nuget_failure
+    kind: build_failure
+    priority: 60
+    stop_on_match: true
+    patterns:
+      - "\\bNU\\d{4}\\b"
+      - "NU1301"
+    hints:
+      - ".NET: fallo de restore NuGet. Revisa NuGet.config y feeds."
+      - "Intenta dotnet restore --force."
+
+# Hints por lenguaje (se agregan cuando kind=float_precision_mismatch).
+language_hints:
+  python:
+    - "Pytest: usa pytest.approx(expected, abs=0.01) o rel=1e-3."
+    - "Finanzas: considera Decimal/centavos para evitar drift."
+  javascript:
+    - "Jest: usa expect(x).toBeCloseTo(expected, precision)."
+  typescript:
+    - "Jest: usa expect(x).toBeCloseTo(expected, precision)."
+  java:
+    - "JUnit: assertEquals(expected, actual, delta)."
+  csharp:
+    - ".NET: usa asserts con tolerancia/precision."
+  dotnet:
+    - ".NET: usa asserts con tolerancia/precision."
+  go:
+    - "Go: compara con epsilon (abs(a-b)<eps) o redondea a centavos."
