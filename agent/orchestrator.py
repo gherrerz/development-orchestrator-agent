@@ -11,7 +11,7 @@ from agent.tools.github_tools import create_branch, git_commit_all
 from agent.tools.github_tools import gh_pr_create
 from agent.tools.llm import chat_json
 from agent.tools.patch_apply import apply_patch_object
-from agent.tools.repo_scan import list_files, snapshot
+from agent.tools.repo_introspect import list_files, snapshot
 from agent.tools.failure_hints import classify_failure, summarize_hints, should_count_as_stuck
 
 try:
