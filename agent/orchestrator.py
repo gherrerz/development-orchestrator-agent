@@ -57,13 +57,89 @@ def extract_json_from_comment(body: str) -> Dict[str, Any]:
     return json.loads(m.group(1))
 
 
+def _stringify_value(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    # Si viene un dict/list, lo serializamos estable (no reventar schema)
+    try:
+        return json.dumps(v, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return str(v)
+
+
+def _coerce_test_strategy(v: Any) -> str:
+    """
+    test_strategy en el schema es string, pero el LLM a veces devuelve dict.
+    Convertimos a string informativa y portable (agnóstica a stack).
+    """
+    if isinstance(v, str):
+        return v
+
+    if isinstance(v, dict):
+        # Caso típico: {"unit_tests": {"description": "...", "test_command": "mvn test"}}
+        if "unit_tests" in v and isinstance(v["unit_tests"], dict):
+            ut = v["unit_tests"]
+            desc = ut.get("description") or ""
+            cmd = ut.get("test_command") or ""
+            parts = []
+            if desc:
+                parts.append(str(desc).strip())
+            if cmd:
+                parts.append(f"Command sugerido: {cmd}")
+            if parts:
+                return " | ".join(parts)
+
+        # Caso genérico: intentamos rescatar campos comunes
+        desc = v.get("description") or v.get("strategy") or v.get("details") or ""
+        cmd = v.get("test_command") or v.get("command") or ""
+        if desc or cmd:
+            return " | ".join([p for p in [str(desc).strip(), (f"Command sugerido: {cmd}" if cmd else "")] if p])
+
+    # Fallback final: stringify
+    return _stringify_value(v)
+
+
 def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Some LLMs accidentally include patch fields (patches/notes) in Plan output.
-    Plan schema has additionalProperties:false, so we must filter.
+    Normaliza el plan para cumplir plan.schema.json de forma robusta y agnóstica.
+    - Filtra propiedades no permitidas.
+    - Coacciona tipos incorrectos (p.ej. dict->string) para evitar fallos por LLM.
     """
-    allowed = set((PLAN_SCHEMA.get("properties") or {}).keys())
-    return {k: v for k, v in plan.items() if k in allowed}
+    allowed_props = (PLAN_SCHEMA.get("properties") or {})
+    allowed_keys = set(allowed_props.keys())
+
+    # 1) Filtrar keys fuera del schema
+    out: Dict[str, Any] = {k: v for k, v in plan.items() if k in allowed_keys}
+
+    # 2) Coerción por campo (solo lo mínimo necesario para pasar schema)
+    #    test_strategy: string estricta
+    if "test_strategy" in out:
+        out["test_strategy"] = _coerce_test_strategy(out["test_strategy"])
+
+    # 3) Coerción genérica: si el schema dice "string" pero llegó dict/list, stringify
+    for key, spec in allowed_props.items():
+        if key not in out:
+            continue
+        expected_type = spec.get("type")
+        if expected_type == "string" and not isinstance(out[key], str):
+            out[key] = _stringify_value(out[key])
+
+        # Si tu schema tiene arrays de strings, y llega string/dict, lo robustecemos
+        if expected_type == "array":
+            items = spec.get("items") or {}
+            item_type = items.get("type")
+            if item_type == "string":
+                v = out[key]
+                if isinstance(v, str):
+                    out[key] = [v]
+                elif isinstance(v, list):
+                    out[key] = [x if isinstance(x, str) else _stringify_value(x) for x in v]
+                else:
+                    out[key] = [_stringify_value(v)]
+
+    return out
 
 
 def normalize_patch(p: Dict[str, Any]) -> Dict[str, Any]:
