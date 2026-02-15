@@ -4,24 +4,62 @@
   "type": "object",
   "required": ["summary", "tasks", "files_to_touch", "test_strategy"],
   "properties": {
-    "summary": { "type": "string" },
-    "assumptions": { "type": "array", "items": { "type": "string" }, "default": [] },
-    "risks": { "type": "array", "items": { "type": "string" }, "default": [] },
-    "files_to_touch": { "type": "array", "items": { "type": "string" } },
+    "summary": { "type": "string", "minLength": 20 },
+
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+
+    "risks": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+
+    "files_to_touch": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?!/)(?!.*\\s$).+"
+      }
+    },
+
     "tasks": {
       "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
         "required": ["id", "title", "description"],
         "properties": {
-          "id": { "type": "string" },
-          "title": { "type": "string" },
-          "description": { "type": "string" }
+          "id": { "type": "string", "minLength": 3, "maxLength": 50 },
+          "title": { "type": "string", "minLength": 5, "maxLength": 120 },
+          "description": { "type": "string", "minLength": 10 },
+
+          "type": {
+            "type": "string",
+            "enum": ["impl", "test", "refactor", "docs", "config"],
+            "default": "impl"
+          },
+
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!/)(?!.*\\s$).+"
+            },
+            "default": []
+          }
         },
         "additionalProperties": false
       }
     },
-    "test_strategy": { "type": "string" }
+
+    "test_strategy": { "type": "string", "minLength": 10 }
   },
   "additionalProperties": false
 }

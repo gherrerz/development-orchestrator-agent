@@ -4,6 +4,7 @@ import re
 import subprocess
 from typing import Any, Dict, List, Tuple
 import shlex
+import hashlib
 
 from agent.stacks.registry import resolve_stack_spec, load_catalog
 from jsonschema import validate
@@ -62,7 +63,6 @@ def _stringify_value(v: Any) -> str:
         return ""
     if isinstance(v, str):
         return v
-    # Si viene un dict/list, lo serializamos estable (no reventar schema)
     try:
         return json.dumps(v, ensure_ascii=False, sort_keys=True)
     except Exception:
@@ -70,15 +70,9 @@ def _stringify_value(v: Any) -> str:
 
 
 def _coerce_test_strategy(v: Any) -> str:
-    """
-    test_strategy en el schema es string, pero el LLM a veces devuelve dict.
-    Convertimos a string informativa y portable (agnóstica a stack).
-    """
     if isinstance(v, str):
         return v
-
     if isinstance(v, dict):
-        # Caso típico: {"unit_tests": {"description": "...", "test_command": "mvn test"}}
         if "unit_tests" in v and isinstance(v["unit_tests"], dict):
             ut = v["unit_tests"]
             desc = ut.get("description") or ""
@@ -90,43 +84,99 @@ def _coerce_test_strategy(v: Any) -> str:
                 parts.append(f"Command sugerido: {cmd}")
             if parts:
                 return " | ".join(parts)
-
-        # Caso genérico: intentamos rescatar campos comunes
         desc = v.get("description") or v.get("strategy") or v.get("details") or ""
         cmd = v.get("test_command") or v.get("command") or ""
         if desc or cmd:
             return " | ".join([p for p in [str(desc).strip(), (f"Command sugerido: {cmd}" if cmd else "")] if p])
-
-    # Fallback final: stringify
     return _stringify_value(v)
+
+
+def _mk_task_id(i: int, title: str, desc: str) -> str:
+    base = f"{i}:{title}:{desc}"
+    h = hashlib.sha1(base.encode("utf-8", errors="ignore")).hexdigest()[:8]
+    return f"T{i}-{h}"
+
+
+def _repair_tasks(tasks_val: Any) -> List[Dict[str, str]]:
+    """
+    Enforce schema for tasks[] items:
+      {id,title,description} only (strings)
+    - If missing id/title, derive them.
+    - If extra fields exist, fold them into description so info isn't lost.
+    """
+    if tasks_val is None:
+        return []
+    if isinstance(tasks_val, dict):
+        tasks = [tasks_val]
+    elif isinstance(tasks_val, list):
+        tasks = tasks_val
+    else:
+        tasks = [{"description": _stringify_value(tasks_val)}]
+
+    repaired: List[Dict[str, str]] = []
+    for idx, t in enumerate(tasks, start=1):
+        if not isinstance(t, dict):
+            desc = _stringify_value(t)
+            title = (desc.split(".")[0] or desc[:60]).strip() or f"Tarea {idx}"
+            repaired.append({"id": _mk_task_id(idx, title, desc), "title": title, "description": desc})
+            continue
+
+        desc = _stringify_value(t.get("description") or t.get("details") or t.get("what") or "")
+        title = _stringify_value(t.get("title") or t.get("name") or "")
+        tid = _stringify_value(t.get("id") or "")
+
+        extras = {k: v for k, v in t.items() if k not in ("id", "title", "description", "details", "what", "name")}
+        if extras:
+            extras_txt = _stringify_value(extras)
+            if desc:
+                desc = f"{desc}\n\nExtra:\n{extras_txt}"
+            else:
+                desc = f"Extra:\n{extras_txt}"
+
+        if not title:
+            title = (desc.splitlines()[0].split(".")[0] if desc else "").strip()
+            if not title:
+                title = f"Tarea {idx}"
+            if len(title) > 80:
+                title = title[:80].rstrip()
+
+        if not desc:
+            desc = title
+
+        if not tid:
+            tid = _mk_task_id(idx, title, desc)
+
+        repaired.append({"id": tid, "title": title, "description": desc})
+
+    return repaired
 
 
 def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Normaliza el plan para cumplir plan.schema.json de forma robusta y agnóstica.
-    - Filtra propiedades no permitidas.
-    - Coacciona tipos incorrectos (p.ej. dict->string) para evitar fallos por LLM.
+    Robust plan normalization:
+    - filter keys not in schema
+    - coerce types for strict fields
+    - repair tasks[] items to comply required fields and forbid extras
     """
     allowed_props = (PLAN_SCHEMA.get("properties") or {})
     allowed_keys = set(allowed_props.keys())
 
-    # 1) Filtrar keys fuera del schema
     out: Dict[str, Any] = {k: v for k, v in plan.items() if k in allowed_keys}
 
-    # 2) Coerción por campo (solo lo mínimo necesario para pasar schema)
-    #    test_strategy: string estricta
     if "test_strategy" in out:
         out["test_strategy"] = _coerce_test_strategy(out["test_strategy"])
 
-    # 3) Coerción genérica: si el schema dice "string" pero llegó dict/list, stringify
+    if "tasks" in out:
+        out["tasks"] = _repair_tasks(out["tasks"])
+
     for key, spec in allowed_props.items():
         if key not in out:
             continue
         expected_type = spec.get("type")
+
         if expected_type == "string" and not isinstance(out[key], str):
             out[key] = _stringify_value(out[key])
 
-        # Si tu schema tiene arrays de strings, y llega string/dict, lo robustecemos
         if expected_type == "array":
             items = spec.get("items") or {}
             item_type = items.get("type")
@@ -143,19 +193,10 @@ def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def normalize_patch(p: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Patch schema expects:
-      { "patches": [ { "path": "...", "diff": "..." }, ... ], "notes": [...] }
-
-    Accept some wrappers:
-      { "patch": {...} }
-      { "files": {...} }  (preferred) -> pass through (patch_apply supports it)
-    """
     if isinstance(p, dict) and "patch" in p and isinstance(p["patch"], dict):
         p = p["patch"]
 
     if "patches" not in p and "files" in p and isinstance(p["files"], dict):
-        # keep files{} as-is, but also satisfy schema by adding empty patches/notes
         p = {"patches": [], "notes": [], "files": p["files"]}
 
     if "patches" not in p:
@@ -163,7 +204,6 @@ def normalize_patch(p: Dict[str, Any]) -> Dict[str, Any]:
     if "notes" not in p:
         p["notes"] = []
 
-    # Filter patch entries to required fields
     patches = []
     for item in (p.get("patches") or []):
         if not isinstance(item, dict):
@@ -218,7 +258,6 @@ def is_safe_test_command(cmd: str, allowed_prefixes: List[str]) -> bool:
 
 
 def run_cmd(cmd: str) -> Tuple[int, str]:
-    """Run a command without invoking a shell (prevents injection)."""
     args = shlex.split(cmd)
     p = subprocess.run(args, text=True, capture_output=True)
     out = (p.stdout or "") + "\n" + (p.stderr or "")
@@ -279,13 +318,65 @@ def render_summary_md(issue_title: str, pr_url: str, iteration_notes: List[str],
 
 
 def stable_failure_signature(test_exit: int, test_out: str) -> str:
-    # Trim noise
     top = test_out.strip().splitlines()[:80]
     top = "\n".join(top)
-    # Keep only first error-like line if possible
     m2 = re.search(r"(ERROR:.*|AssertionError:.*|Traceback.*|FAIL:.*)", top, re.IGNORECASE)
     top = m2.group(1).strip() if m2 else ""
     return f"exit={test_exit}|{top[:200]}"
+
+
+def _load_prompt(rel_path: str) -> str:
+    return open(os.path.join(BASE_DIR, "prompts", rel_path), "r", encoding="utf-8").read()
+
+
+def _attempt_plan_repair_once(
+    *,
+    invalid_plan: Dict[str, Any],
+    validation_error: str,
+    run_req: Dict[str, Any],
+    issue_title: str,
+    issue_body: str,
+    repo_snap: Dict[str, str],
+    memories: str,
+) -> Dict[str, Any]:
+    """
+    Enterprise fallback: one-shot schema repair using LLM, forced to plan.schema.json.
+    If the model still fails schema validation, caller aborts with clear error.
+    """
+    repair_prompt = _load_prompt("repair_plan_agent.md")
+
+    # Persist invalid input + error for auditability
+    write_out("agent/out/plan_invalid.json", json.dumps(invalid_plan, ensure_ascii=False, indent=2))
+    write_out("agent/out/plan_validation_error.txt", validation_error)
+
+    repaired = chat_json(
+        system=repair_prompt,
+        user=json.dumps({
+            "schema_json": PLAN_SCHEMA,
+            "invalid_plan_json": invalid_plan,
+            "validation_error": validation_error,
+            "context": {
+                "stack": run_req.get("stack"),
+                "language": run_req.get("language"),
+                "user_story": run_req.get("user_story"),
+                "acceptance_criteria": run_req.get("acceptance_criteria", []),
+                "constraints": run_req.get("constraints", []),
+                "issue_title": issue_title,
+                "issue_body": issue_body,
+                "repo_snapshot": repo_snap,
+                "memories": memories,
+            }
+        }, ensure_ascii=False),
+        schema_name="plan.schema.json",  # hard enforcement
+    )
+
+    # Normalize (still) and return
+    repaired = normalize_plan(repaired)
+
+    # Persist repaired plan for auditability
+    write_out("agent/out/plan_repaired.json", json.dumps(repaired, ensure_ascii=False, indent=2))
+
+    return repaired
 
 
 def main() -> None:
@@ -299,11 +390,9 @@ def main() -> None:
 
     run_req = extract_json_from_comment(comment_body)
 
-    # Resolve stack spec (data-driven via catalog + repo detection)
     catalog = load_catalog()
     spec = resolve_stack_spec(run_req, repo_root=".", catalog=catalog)
 
-    # Backfill required fields for schema
     run_req["stack"] = spec.stack_id or (run_req.get("stack") or "auto")
     run_req["language"] = spec.language or (run_req.get("language") or "generic")
     if spec.commands.test:
@@ -313,7 +402,6 @@ def main() -> None:
 
     language = (run_req.get("language") or "").lower().strip()
 
-    # Security: never run arbitrary shell from issue comments
     allowed_prefixes = spec.allowed_test_prefixes or []
     if run_req.get("test_command") and not is_safe_test_command(str(run_req.get("test_command")), allowed_prefixes):
         raise ValueError(
@@ -321,7 +409,6 @@ def main() -> None:
             "Usa un comando estándar del stack (sin ; & | $ ` > < ni saltos de línea)."
         )
 
-    # Memory (safe degradation)
     memories = ""
     if pine_query:
         try:
@@ -331,7 +418,6 @@ def main() -> None:
         except Exception as e:
             memories = f"(memory disabled: {e})"
 
-    # Repo snapshot
     files = list_files(".")
     key_candidates = [p for p in files if any(p.endswith(suf) for suf in [
         "pyproject.toml", "requirements.txt", "package.json", "package-lock.json",
@@ -342,13 +428,14 @@ def main() -> None:
     key_candidates = list(dict.fromkeys(key_candidates))[:60]
     repo_snap = snapshot(key_candidates)
 
-    # Prompts
-    planner_prompt = open(os.path.join(BASE_DIR, "prompts", "design_agent.md"), "r", encoding="utf-8").read()
-    impl_prompt = open(os.path.join(BASE_DIR, "prompts", "implement_agent.md"), "r", encoding="utf-8").read()
-    test_prompt = open(os.path.join(BASE_DIR, "prompts", "test_agent.md"), "r", encoding="utf-8").read()
+    planner_prompt = _load_prompt("design_agent.md")
+    impl_prompt = _load_prompt("implement_agent.md")
+    test_prompt = _load_prompt("test_agent.md")
 
-    # Planner -> Plan (MUST pass schema_name)
-    plan = chat_json(
+    # ---------------------------
+    # Planner -> Plan (with enterprise repair fallback, max 1)
+    # ---------------------------
+    plan_raw = chat_json(
         system=planner_prompt,
         user=json.dumps({
             "stack": run_req.get("stack"),
@@ -363,8 +450,37 @@ def main() -> None:
         }, ensure_ascii=False),
         schema_name="plan.schema.json",
     )
-    plan = normalize_plan(plan)
-    safe_validate(plan, PLAN_SCHEMA, "plan.schema.json")
+
+    plan = normalize_plan(plan_raw)
+
+    repaired_once = False
+    try:
+        safe_validate(plan, PLAN_SCHEMA, "plan.schema.json")
+    except ValueError as e:
+        # one-shot repair
+        if repaired_once:
+            raise
+        repaired_once = True
+
+        plan = _attempt_plan_repair_once(
+            invalid_plan=plan_raw,
+            validation_error=str(e),
+            run_req=run_req,
+            issue_title=issue_title,
+            issue_body=issue_body,
+            repo_snap=repo_snap,
+            memories=memories,
+        )
+
+        try:
+            safe_validate(plan, PLAN_SCHEMA, "plan.schema.json")
+        except ValueError as e2:
+            # Abort clearly: enterprise policy
+            write_out("agent/out/plan_repair_failed.txt", str(e2))
+            raise ValueError(
+                "Plan inválido incluso después de 1 intento de repair. "
+                "Revisa agent/out/plan_invalid.json, plan_validation_error.txt, plan_repaired.json, plan_repair_failed.txt"
+            ) from e2
 
     pine_upsert_event(repo, issue_number, "plan", json.dumps(plan, ensure_ascii=False), {
         "stack": run_req.get("stack"),
@@ -385,7 +501,6 @@ def main() -> None:
     stuck_count = 0
 
     for i in range(1, max_iterations + 1):
-
         prev_test_output = ""
         if os.path.exists("agent/out/last_test_output.txt"):
             prev_test_output = open(
@@ -404,9 +519,7 @@ def main() -> None:
             except Exception:
                 prev_hints = []
 
-        # ---------------------------
         # IMPLEMENT
-        # ---------------------------
         patch_obj = chat_json(
             system=impl_prompt,
             user=json.dumps({
@@ -430,7 +543,6 @@ def main() -> None:
 
         apply_patch_object(patch_obj)
 
-        # Detect changes
         _, changed = run_cmd("git diff --name-only")
         changed = changed.strip()
         write_out(f"agent/out/iter_{i}_changed_files.txt", changed)
@@ -441,16 +553,12 @@ def main() -> None:
 
         git_commit_all(f"agent: implement issue {issue_number} (iter {i})")
 
-        # ---------------------------
         # RUN TESTS (SIN SHELL)
-        # ---------------------------
         test_cmd = run_req.get("test_command") or ""
         test_exit, test_out = run_cmd(test_cmd)
         write_out("agent/out/last_test_output.txt", test_out)
 
-        # ---------------------------
         # FAILURE HINTS
-        # ---------------------------
         try:
             meta = fh_classify_failure(
                 test_out,
@@ -465,7 +573,7 @@ def main() -> None:
         except Exception:
             hints = []
 
-        # 🔥 AQUÍ ES DONDE VA AHORA EL UPSERT CORRECTO
+        # Correct pinecone upsert after tests
         pine_upsert_event(
             repo,
             issue_number,
@@ -479,9 +587,7 @@ def main() -> None:
             }
         )
 
-        # ---------------------------
         # TEST AGENT
-        # ---------------------------
         tr = chat_json(
             system=test_prompt,
             user=json.dumps({
@@ -504,6 +610,14 @@ def main() -> None:
 
         iteration_notes.append(f"Iteración {i}: test exit={test_exit}")
 
+        # Optional: stuck detection (kept, but not aborting hard here)
+        failure_sig = stable_failure_signature(test_exit, test_out)
+        if should_count_as_stuck(last_failure_sig, failure_sig):
+            stuck_count += 1
+        else:
+            stuck_count = 0
+        last_failure_sig = failure_sig
+
     summary_md = render_summary_md(issue_title, pr_url, iteration_notes, test_report)
     write_out("agent/out/summary.md", summary_md)
 
@@ -512,7 +626,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        # Always write a summary for the workflow comment step
         msg = f"❌ Orchestrator error: {e}"
         os.makedirs("agent/out", exist_ok=True)
         with open("agent/out/summary.md", "w", encoding="utf-8", errors="replace") as f:
