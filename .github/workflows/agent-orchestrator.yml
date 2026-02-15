@@ -7,10 +7,21 @@ on:
 permissions:
   contents: write
   issues: write
+  pull-requests: write
+
+concurrency:
+  group: agent-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
 
 jobs:
   run-agent:
-    if: startsWith(github.event.comment.body, '/agent run')
+    # Hard gate: only run for /agent run and trusted authors
+    if: >
+      startsWith(github.event.comment.body, '/agent run') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+
     runs-on: ubuntu-latest
 
     steps:
@@ -21,6 +32,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            agent/requirements.txt
+            requirements.txt
+            pyproject.toml
 
       - name: Install agent runner deps
         run: |
@@ -34,31 +50,60 @@ jobs:
         run: |
           python -m agent.tools.extract_request
 
-      # Toolchains based on requested language
+      # Toolchains based on resolved language
       - name: Setup Node
-        if: steps.req.outputs.language == 'javascript' || steps.req.outputs.language == 'typescript' || startsWith(steps.req.outputs.stack, 'node-')
+        if: steps.req.outputs.toolchain_kind == 'node' || steps.req.outputs.language == 'javascript' || steps.req.outputs.language == 'typescript' || startsWith(steps.req.outputs.stack, 'node-')
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: ${{ steps.req.outputs.toolchain_version != '' && steps.req.outputs.toolchain_version || '20' }}
+          cache: ${{ steps.req.outputs.package_manager != '' && steps.req.outputs.package_manager || 'npm' }}
+          cache-dependency-path: |
+            package-lock.json
+            pnpm-lock.yaml
+            yarn.lock
 
       - name: Setup Java
-        if: steps.req.outputs.language == 'java' || startsWith(steps.req.outputs.stack, 'java-')
+        if: steps.req.outputs.toolchain_kind == 'java' || steps.req.outputs.language == 'java' || startsWith(steps.req.outputs.stack, 'java-')
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
-          java-version: "21"
+          java-version: ${{ steps.req.outputs.toolchain_version != '' && steps.req.outputs.toolchain_version || '21' }}
+          cache: "maven"
+
+      - name: Cache Gradle (if needed)
+        if: steps.req.outputs.toolchain_kind == 'java'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/gradle-wrapper.properties', '**/*.gradle*', '**/settings.gradle*') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: Setup .NET
-        if: steps.req.outputs.language == 'dotnet' || steps.req.outputs.language == 'csharp' || startsWith(steps.req.outputs.stack, 'dotnet-')
+        if: steps.req.outputs.toolchain_kind == 'dotnet' || steps.req.outputs.language == 'dotnet' || steps.req.outputs.language == 'csharp' || startsWith(steps.req.outputs.stack, 'dotnet-')
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0.x"
+          dotnet-version: ${{ steps.req.outputs.toolchain_version != '' && steps.req.outputs.toolchain_version || '8.0.x' }}
+
+      - name: Cache NuGet packages
+        if: steps.req.outputs.toolchain_kind == 'dotnet'
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/*.fsproj', '**/*.vbproj', '**/*.sln', '**/packages.lock.json') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
 
       - name: Setup Go
-        if: steps.req.outputs.language == 'go' || startsWith(steps.req.outputs.stack, 'go-')
+        if: steps.req.outputs.toolchain_kind == 'go' || steps.req.outputs.language == 'go' || startsWith(steps.req.outputs.stack, 'go-')
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22.x"
+          go-version: ${{ steps.req.outputs.toolchain_version != '' && steps.req.outputs.toolchain_version || '1.22.x' }}
+          cache: true
+          cache-dependency-path: |
+            **/go.sum
 
       - name: Install project deps (multi-stack)
         env:
@@ -85,6 +130,14 @@ jobs:
         run: |
           python -m agent.orchestrator
 
+      - name: Upload agent artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-out
+          path: agent/out
+          if-no-files-found: ignore
+
       - name: Comment back to Issue (robust)
         if: always()
         env:
@@ -99,7 +152,6 @@ jobs:
             BODY="⚠️ El agente falló antes de generar summary.md. Revisa logs del workflow."
           fi
 
-          # retry/backoff for GitHub 429 throttling
           for i in 1 2 3 4 5; do
             if gh issue comment "$ISSUE_NUMBER" --body "$BODY"; then
               exit 0

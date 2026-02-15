@@ -9,22 +9,11 @@
       "items": { "type": "string" },
       "default": []
     },
-    "patches": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "required": ["path", "diff"],
-        "properties": {
-          "path": { "type": "string" },
-          "diff": { "type": "string", "minLength": 10 }
-        },
-        "additionalProperties": false
-      }
-    },
+
     "files": {
       "type": "object",
       "minProperties": 1,
+      "description": "FORMATO RECOMENDADO. Devuelve contenido completo del archivo.",
       "additionalProperties": {
         "oneOf": [
           { "type": "string" },
@@ -43,8 +32,28 @@
           }
         ]
       }
+    },
+
+    "patches": {
+      "type": "array",
+      "minItems": 1,
+      "description": "USAR SOLO si el cambio es trivial (1-2 líneas).",
+      "items": {
+        "type": "object",
+        "required": ["path", "diff"],
+        "properties": {
+          "path": { "type": "string" },
+          "diff": { "type": "string", "minLength": 10 }
+        },
+        "additionalProperties": false
+      }
     }
   },
-  "oneOf": [{ "required": ["patches"] }, { "required": ["files"] }],
+
+  "oneOf": [
+    { "required": ["files"] },
+    { "required": ["patches"] }
+  ],
+
   "additionalProperties": false
 }

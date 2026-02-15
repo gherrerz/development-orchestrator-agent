@@ -3,7 +3,9 @@ import os
 import re
 import subprocess
 from typing import Any, Dict, List, Tuple
+import shlex
 
+from agent.stacks.registry import resolve_stack_spec, load_catalog
 from jsonschema import validate
 
 from agent.tools.github_tools import get_issue, create_branch, git_commit_all, gh_pr_create
@@ -55,39 +57,6 @@ def extract_json_from_comment(body: str) -> Dict[str, Any]:
     return json.loads(m.group(1))
 
 
-def apply_stack_defaults(run_req: Dict[str, Any]) -> Dict[str, Any]:
-    # Default test command by language (agnostic)
-    lang = (run_req.get("language") or "").lower().strip()
-    stack = (run_req.get("stack") or "").strip()
-
-    if not lang and stack:
-        if stack.startswith("python-"):
-            lang = "python"
-        elif stack.startswith("java-"):
-            lang = "java"
-        elif stack.startswith("node-"):
-            lang = "javascript"
-        elif stack.startswith("dotnet-"):
-            lang = "dotnet"
-        elif stack.startswith("go-"):
-            lang = "go"
-
-    if lang and not run_req.get("test_command"):
-        if lang == "python":
-            run_req["test_command"] = "pytest -q"
-        elif lang in ("javascript", "typescript"):
-            run_req["test_command"] = "npm test"
-        elif lang == "java":
-            run_req["test_command"] = "mvn -q test"
-        elif lang in ("dotnet", "csharp"):
-            run_req["test_command"] = "dotnet test"
-        elif lang == "go":
-            run_req["test_command"] = "go test ./..."
-
-    run_req["language"] = lang or (run_req.get("language") or "")
-    return run_req
-
-
 def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     """
     Some LLMs accidentally include patch fields (patches/notes) in Plan output.
@@ -104,16 +73,13 @@ def normalize_patch(p: Dict[str, Any]) -> Dict[str, Any]:
 
     Accept some wrappers:
       { "patch": {...} }
-      { "files": {...} }  (old format) -> convert to patches with empty diffs (fallback)
+      { "files": {...} }  (preferred) -> pass through (patch_apply supports it)
     """
     if isinstance(p, dict) and "patch" in p and isinstance(p["patch"], dict):
         p = p["patch"]
 
-    # If LLM mistakenly returns plan-like structure with "files_to_touch" etc,
-    # keep only patch keys if they exist.
     if "patches" not in p and "files" in p and isinstance(p["files"], dict):
-        # Convert files{} into patch-like object by writing full contents later via patch_apply fallback.
-        # We'll keep it as files{} but also provide required keys so schema doesn't explode.
+        # keep files{} as-is, but also satisfy schema by adding empty patches/notes
         p = {"patches": [], "notes": [], "files": p["files"]}
 
     if "patches" not in p:
@@ -139,25 +105,15 @@ def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[s
     if isinstance(tr, dict) and "test_report" in tr and isinstance(tr["test_report"], dict):
         tr = tr["test_report"]
 
-    if all(k in tr for k in ("passed", "summary", "acceptance_criteria_status")):
-        if "failure_hints" not in tr:
-            tr["failure_hints"] = []
-        return tr
-
-    passed = bool(tr.get("passed", tr.get("tests_passed", False)))
-    summary = tr.get("summary") or tr.get("test_summary") or "Resultado de pruebas no especificado."
-
-    criteria = run_req.get("acceptance_criteria") or []
-    evidence_base = tr.get("criteria_verification") or tr.get("summary") or tr.get("test_summary") or ""
-    if not isinstance(evidence_base, str):
-        evidence_base = str(evidence_base)
-
-    ac_list = []
-    if criteria:
-        for c in criteria:
-            ac_list.append({"criterion": c, "met": passed, "evidence": evidence_base[:400]})
+    if all(k in tr for k in ("passed", "summary")):
+        passed = bool(tr.get("passed"))
+        summary = str(tr.get("summary") or "")
     else:
-        ac_list = [{"criterion": "N/A", "met": passed, "evidence": summary[:400]}]
+        passed = False
+        summary = str(tr)[:1000]
+
+    ac = run_req.get("acceptance_criteria", []) or []
+    ac_list = [{"criteria": c, "met": passed, "evidence": summary[:400]} for c in ac]
 
     out: Dict[str, Any] = {
         "passed": passed,
@@ -170,8 +126,25 @@ def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[s
     return out
 
 
+def _has_shell_metachars(cmd: str) -> bool:
+    return bool(re.search(r"[;&|`$><\n\r]", cmd or ""))
+
+
+def is_safe_test_command(cmd: str, allowed_prefixes: List[str]) -> bool:
+    cmd = (cmd or "").strip()
+    if not cmd:
+        return True
+    if _has_shell_metachars(cmd):
+        return False
+    normalized = re.sub(r"\s+", " ", cmd).strip().lower()
+    allowed = [re.sub(r"\s+", " ", a).strip().lower() for a in (allowed_prefixes or [])]
+    return any(normalized.startswith(a) for a in allowed)
+
+
 def run_cmd(cmd: str) -> Tuple[int, str]:
-    p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+    """Run a command without invoking a shell (prevents injection)."""
+    args = shlex.split(cmd)
+    p = subprocess.run(args, text=True, capture_output=True)
     out = (p.stdout or "") + "\n" + (p.stderr or "")
     return p.returncode, out
 
@@ -188,25 +161,54 @@ def compact_memories(matches: List[Dict[str, Any]]) -> str:
     return "\n---\n".join(texts)
 
 
+def pine_upsert_event(repo: str, issue_number: str, kind: str, text: str, extra: Dict[str, Any] | None = None) -> None:
+    if not pine_upsert:
+        return
+    try:
+        payload = {
+            "id": f"{kind}:{issue_number}:{os.environ.get('GITHUB_RUN_ID','')}-{os.environ.get('GITHUB_RUN_ATTEMPT','')}",
+            "text": text,
+            "metadata": {"kind": kind, **(extra or {})},
+        }
+        pine_upsert(repo, issue_number, [payload])
+    except Exception:
+        return
+
+
 def write_out(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8", errors="replace") as f:
-        f.write(content)
+        f.write(content if content.endswith("\n") else content + "\n")
+
+
+def render_summary_md(issue_title: str, pr_url: str, iteration_notes: List[str], test_report: Dict[str, Any]) -> str:
+    md = []
+    md.append(f"## 🤖 Agent 결과\n")
+    md.append(f"**Issue:** {issue_title}\n")
+    if pr_url:
+        md.append(f"**PR:** {pr_url}\n")
+    md.append("\n---\n")
+    md.append("### Iteraciones\n")
+    for n in iteration_notes:
+        md.append(f"- {n}\n")
+    md.append("\n---\n")
+    md.append("### Test report\n")
+    md.append(f"- Passed: `{test_report.get('passed')}`\n")
+    md.append(f"- Summary: {test_report.get('summary','')}\n")
+    if test_report.get("failure_hints"):
+        md.append("\n### Failure hints\n")
+        for h in test_report["failure_hints"][:12]:
+            md.append(f"- {h}\n")
+    return "".join(md)
 
 
 def stable_failure_signature(test_exit: int, test_out: str) -> str:
-    """
-    Compute a stable signature for stuck detection.
-    Keep it robust and stack-agnostic.
-    """
-    txt = (test_out or "")[:4000]
-    # try to capture top error line
-    m = re.search(r"(?m)^(E\s+.+)$", txt)
-    top = m.group(1).strip() if m else ""
-    # fallback: first line with "Error" or "Exception"
-    if not top:
-        m2 = re.search(r"(?m)^(.{0,200}(Error|Exception).{0,200})$", txt)
-        top = m2.group(1).strip() if m2 else ""
+    # Trim noise
+    top = test_out.strip().splitlines()[:80]
+    top = "\n".join(top)
+    # Keep only first error-like line if possible
+    m2 = re.search(r"(ERROR:.*|AssertionError:.*|Traceback.*|FAIL:.*)", top, re.IGNORECASE)
+    top = m2.group(1).strip() if m2 else ""
     return f"exit={test_exit}|{top[:200]}"
 
 
@@ -220,10 +222,28 @@ def main() -> None:
     issue_body = issue.get("body", "") or ""
 
     run_req = extract_json_from_comment(comment_body)
-    run_req = apply_stack_defaults(run_req)
+
+    # Resolve stack spec (data-driven via catalog + repo detection)
+    catalog = load_catalog()
+    spec = resolve_stack_spec(run_req, repo_root=".", catalog=catalog)
+
+    # Backfill required fields for schema
+    run_req["stack"] = spec.stack_id or (run_req.get("stack") or "auto")
+    run_req["language"] = spec.language or (run_req.get("language") or "generic")
+    if spec.commands.test:
+        run_req["test_command"] = spec.commands.test
+
     safe_validate(run_req, RUN_SCHEMA, "run_request.schema.json")
 
     language = (run_req.get("language") or "").lower().strip()
+
+    # Security: never run arbitrary shell from issue comments
+    allowed_prefixes = spec.allowed_test_prefixes or []
+    if run_req.get("test_command") and not is_safe_test_command(str(run_req.get("test_command")), allowed_prefixes):
+        raise ValueError(
+            "test_command rechazado por seguridad. "
+            "Usa un comando estándar del stack (sin ; & | $ ` > < ni saltos de línea)."
+        )
 
     # Memory (safe degradation)
     memories = ""
@@ -270,30 +290,47 @@ def main() -> None:
     plan = normalize_plan(plan)
     safe_validate(plan, PLAN_SCHEMA, "plan.schema.json")
 
+    pine_upsert_event(repo, issue_number, "plan", json.dumps(plan, ensure_ascii=False), {
+        "stack": run_req.get("stack"),
+        "language": run_req.get("language"),
+        "issue_title": issue_title,
+    })
+
     max_iterations = int(run_req.get("max_iterations", 2))
     base_branch = "main"
     branch_name = f"agent/issue-{issue_number}"
-    create_branch(branch_name)
+    create_branch(branch_name, base_branch)
 
+    pr_url = ""
     iteration_notes: List[str] = []
-    last_sig = ""
+    test_report: Dict[str, Any] = {"passed": False, "summary": "not run"}
+
+    last_failure_sig = ""
     stuck_count = 0
 
-    os.makedirs("agent/out", exist_ok=True)
-
     for i in range(1, max_iterations + 1):
+
         prev_test_output = ""
         if os.path.exists("agent/out/last_test_output.txt"):
-            prev_test_output = open("agent/out/last_test_output.txt", "r", encoding="utf-8", errors="replace").read()
+            prev_test_output = open(
+                "agent/out/last_test_output.txt",
+                "r",
+                encoding="utf-8",
+                errors="replace"
+            ).read()
 
         prev_hints: List[str] = []
         if os.path.exists("agent/out/failure_hints.json"):
             try:
-                prev_hints = json.loads(open("agent/out/failure_hints.json", "r", encoding="utf-8").read())
+                prev_hints = json.loads(
+                    open("agent/out/failure_hints.json", "r", encoding="utf-8").read()
+                )
             except Exception:
                 prev_hints = []
 
-        # Implement -> Patch (MUST pass schema_name)
+        # ---------------------------
+        # IMPLEMENT
+        # ---------------------------
         patch_obj = chat_json(
             system=impl_prompt,
             user=json.dumps({
@@ -311,132 +348,97 @@ def main() -> None:
             }, ensure_ascii=False),
             schema_name="patch.schema.json",
         )
+
         patch_obj = normalize_patch(patch_obj)
         safe_validate(patch_obj, PATCH_SCHEMA, "patch.schema.json")
 
-        # Apply patch
         apply_patch_object(patch_obj)
 
-        # Changed files list (git)
+        # Detect changes
         _, changed = run_cmd("git diff --name-only")
         changed = changed.strip()
         write_out(f"agent/out/iter_{i}_changed_files.txt", changed)
 
-        # If no changes, don't burn iteration with same state
         if not changed:
-            iteration_notes.append(f"Iteración {i}: ⚠️ patch no produjo cambios reales. Reintentando.")
-            write_out("agent/out/failure_hints.json", json.dumps([
-                "El patch no cambió ningún archivo. Debes modificar al menos 1 archivo real.",
-                "Si el diff unificado falla, usa formato files{} para escribir contenidos completos."
-            ], ensure_ascii=False))
+            iteration_notes.append(f"Iteración {i}: sin cambios detectados (skip)")
             continue
 
-        # Refresh snapshot for changed files (higher-fidelity loop)
-        changed_paths = [p.strip() for p in changed.splitlines() if p.strip()]
-        if changed_paths:
-            # snapshot expects paths like ./...
-            snap_paths = []
-            for pth in changed_paths[:25]:
-                if pth.startswith("./"):
-                    snap_paths.append(pth)
-                else:
-                    snap_paths.append("./" + pth)
-            try:
-                repo_snap = snapshot(list(dict.fromkeys(key_candidates + snap_paths))[:80])
-            except Exception:
-                pass
+        git_commit_all(f"agent: implement issue {issue_number} (iter {i})")
 
-        # Run tests
+        # ---------------------------
+        # RUN TESTS (SIN SHELL)
+        # ---------------------------
         test_cmd = run_req.get("test_command") or ""
         test_exit, test_out = run_cmd(test_cmd)
         write_out("agent/out/last_test_output.txt", test_out)
 
-        # Failure hints from heuristic classifier (module)
+        # ---------------------------
+        # FAILURE HINTS
+        # ---------------------------
         try:
             meta = fh_classify_failure(
                 test_out,
                 language=language,
-                stack=str(run_req.get("stack", "")),
-                test_command=str(run_req.get("test_command", "")),
+                stack=str(run_req.get("stack") or ""),
             )
-        except TypeError:
-            # if failure_hints.classify_failure has simpler signature
-            meta = fh_classify_failure(test_out, language=language)
+            hints = summarize_hints(meta)
+            write_out(
+                "agent/out/failure_hints.json",
+                json.dumps(hints, ensure_ascii=False, indent=2)
+            )
+        except Exception:
+            hints = []
 
-        hints = summarize_hints(meta) if meta else []
-        if test_exit != 0 and hints:
-            write_out("agent/out/failure_hints.json", json.dumps(hints, ensure_ascii=False))
+        # 🔥 AQUÍ ES DONDE VA AHORA EL UPSERT CORRECTO
+        pine_upsert_event(
+            repo,
+            issue_number,
+            "iteration",
+            f"iter={i}\nchanged=\n{changed}\n\nexit={test_exit}\n\n{test_out[:4000]}",
+            {
+                "iteration": i,
+                "exit": int(test_exit),
+                "stack": run_req.get("stack"),
+                "language": run_req.get("language"),
+            }
+        )
 
-        iteration_notes.append(f"Iteración {i}: test exit={test_exit}")
-
-        # Tester agent report (MUST pass schema_name)
-        test_report = chat_json(
+        # ---------------------------
+        # TEST AGENT
+        # ---------------------------
+        tr = chat_json(
             system=test_prompt,
             user=json.dumps({
                 "stack": run_req.get("stack"),
                 "language": run_req.get("language"),
-                "test_command": test_cmd,
-                "test_exit_code": test_exit,
-                "test_output": test_out,
+                "user_story": run_req.get("user_story"),
                 "acceptance_criteria": run_req.get("acceptance_criteria", []),
+                "constraints": run_req.get("constraints", []),
+                "plan": plan,
+                "test_command": test_cmd,
+                "test_exit": test_exit,
+                "test_output": test_out[:12000],
                 "failure_hints": hints,
             }, ensure_ascii=False),
             schema_name="test_report.schema.json",
         )
-        test_report = normalize_test_report(test_report, run_req)
+
+        test_report = normalize_test_report(tr, run_req)
         safe_validate(test_report, TEST_SCHEMA, "test_report.schema.json")
 
-        # persist hints from tester
-        if test_report.get("failure_hints"):
-            write_out("agent/out/failure_hints.json", json.dumps(test_report["failure_hints"], ensure_ascii=False))
+        iteration_notes.append(f"Iteración {i}: test exit={test_exit}")
 
-        # stuck detection: use stable signature + changed list
-        new_sig = stable_failure_signature(test_exit, test_out)
-
-        if test_exit != 0 and should_count_as_stuck(last_sig, new_sig, changed):
-            stuck_count += 1
-        else:
-            stuck_count = 0
-
-        last_sig = new_sig
-
-        if stuck_count >= 2:
-            iteration_notes.append(f"Iteración {i}: atasco detectado (mismo error + mismos cambios). Se detiene el loop.")
-            break
-
-        if bool(test_report.get("passed")):
-            git_commit_all(f"agent: implement issue #{issue_number}")
-            pr_url = gh_pr_create(
-                title=f"[agent] Issue #{issue_number}: {issue_title}",
-                body=f"### 🤖 Agent Orchestrator — Issue #{issue_number}\n\nPlan:\n```json\n{json.dumps(plan, ensure_ascii=False, indent=2)}\n```",
-                head=branch_name,
-                base=base_branch,
-            )
-            iteration_notes.append(f"✅ Tests pasaron; PR creado: {pr_url}")
-            break
-
-    # Summary
-    summary_lines = [
-        f"🤖 Agent Orchestrator — Issue #{issue_number}",
-        f"Stack/Lang: {run_req.get('stack')} / {run_req.get('language')}",
-        "",
-        "Historia de usuario",
-        "",
-        run_req.get("user_story", ""),
-        "",
-        "Criterios de aceptación",
-        "",
-    ] + [f"- {c}" for c in (run_req.get("acceptance_criteria") or [])] + [
-        "",
-        "Plan (resumen)",
-        plan.get("summary", ""),
-        "",
-        "Resultado de iteraciones",
-        "",
-    ] + [f"- {n}" for n in iteration_notes]
-
-    write_out("agent/out/summary.md", "\n".join(summary_lines))
+    summary_md = render_summary_md(issue_title, pr_url, iteration_notes, test_report)
+    write_out("agent/out/summary.md", summary_md)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        # Always write a summary for the workflow comment step
+        msg = f"❌ Orchestrator error: {e}"
+        os.makedirs("agent/out", exist_ok=True)
+        with open("agent/out/summary.md", "w", encoding="utf-8", errors="replace") as f:
+            f.write(msg + "\n")
+        raise

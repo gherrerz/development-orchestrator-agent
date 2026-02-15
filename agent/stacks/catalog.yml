@@ -1,5 +1,15 @@
+# Stack catalog (data-driven)
+# Add new stacks here without touching orchestrator/stack_setup code.
+# Fields:
+#   language: python|javascript|typescript|java|dotnet|go|...
+#   toolchain: { kind: python|node|java|dotnet|go, version: "<version>" }
+#   deps: { apt:[], pip:[], npm:[] }
+#   commands: { test:"...", build:"...", lint:"..." }
+#   allowed_test_prefixes: ["..."]  # security allowlist prefixes for test_command
+
 python-fastapi-postgres:
   language: python
+  toolchain: { kind: python, version: "3.11" }
   deps:
     pip:
       - fastapi
@@ -7,10 +17,15 @@ python-fastapi-postgres:
       - httpx
       - psycopg2-binary
       - pytest
-  test_command: "pytest -q"
+  commands:
+    test: "pytest -q"
+  allowed_test_prefixes:
+    - "pytest"
+    - "python -m pytest"
 
 python-django:
   language: python
+  toolchain: { kind: python, version: "3.11" }
   deps:
     pip:
       - django
@@ -18,44 +33,90 @@ python-django:
       - psycopg2-binary
       - pytest
       - pytest-django
-  test_command: "pytest -q"
+  commands:
+    test: "pytest -q"
+  allowed_test_prefixes:
+    - "pytest"
+    - "python -m pytest"
 
 java-spring-boot:
   language: java
+  toolchain: { kind: java, version: "21" }
   deps:
     apt:
       - maven
-  test_command: "mvn -q test"
+  commands:
+    test: "mvn -q test"
+    build: "mvn -q -DskipTests package"
+  allowed_test_prefixes:
+    - "mvn test"
+    - "mvn -q test"
+    - "./gradlew test"
+    - "./gradlew -q test"
 
 node-express:
   language: javascript
+  toolchain: { kind: node, version: "20" }
   deps:
     npm:
       - express
-  test_command: "npm test"
+  commands:
+    test: "npm test"
+  allowed_test_prefixes:
+    - "npm test"
+    - "npm run test"
+    - "pnpm test"
+    - "pnpm run test"
+    - "yarn test"
 
 node-react:
   language: javascript
+  toolchain: { kind: node, version: "20" }
   deps:
     npm:
       - react
       - react-dom
-  test_command: "npm test"
+  commands:
+    test: "npm test"
+  allowed_test_prefixes:
+    - "npm test"
+    - "npm run test"
+    - "pnpm test"
+    - "pnpm run test"
+    - "yarn test"
 
 node-angular:
   language: typescript
+  toolchain: { kind: node, version: "20" }
   deps:
     npm:
       - "@angular/core"
       - "@angular/cli"
-  test_command: "npm test"
+  commands:
+    test: "npm test"
+  allowed_test_prefixes:
+    - "npm test"
+    - "npm run test"
+    - "pnpm test"
+    - "pnpm run test"
+    - "yarn test"
 
 dotnet-webapi:
   language: dotnet
+  toolchain: { kind: dotnet, version: "8.0.x" }
   deps: {}
-  test_command: "dotnet test"
+  commands:
+    test: "dotnet test"
+  allowed_test_prefixes:
+    - "dotnet test"
 
 go-fiber:
   language: go
+  toolchain: { kind: go, version: "1.22.x" }
   deps: {}
-  test_command: "go test ./..."
+  commands:
+    test: "go test ./..."
+  allowed_test_prefixes:
+    - "go test ./..."
+    - "go test ./... -v"
+    - "go test ./... -count=1"

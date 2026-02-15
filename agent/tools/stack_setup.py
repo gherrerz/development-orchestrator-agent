@@ -2,13 +2,19 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List
+
+from agent.stacks.registry import load_catalog, resolve_stack_spec
+
 
 def run(cmd: List[str], check: bool = True) -> subprocess.CompletedProcess:
     p = subprocess.run(cmd, text=True, capture_output=True)
     if check and p.returncode != 0:
-        raise RuntimeError(f"Command failed: {' '.join(cmd)}\nSTDOUT:\n{p.stdout}\nSTDERR:\n{p.stderr}")
+        raise RuntimeError(
+            f"Command failed: {' '.join(cmd)}\nSTDOUT:\n{p.stdout}\nSTDERR:\n{p.stderr}"
+        )
     return p
+
 
 def exists_any(patterns: List[str]) -> bool:
     for pat in patterns:
@@ -16,32 +22,44 @@ def exists_any(patterns: List[str]) -> bool:
             return True
     return False
 
-def load_catalog() -> Dict[str, Any]:
-    yml = Path("agent/stacks/catalog.yml")
-    if not yml.exists():
-        return {}
-    try:
-        import yaml  # type: ignore
-    except Exception:
-        # best-effort: skip if PyYAML missing
-        return {}
-    return (yaml.safe_load(yml.read_text(encoding="utf-8")) or {})
 
-def install_repo_declared_deps(language: str) -> None:
+def install_repo_declared_deps(language: str, package_manager: str) -> None:
+    """Install dependencies declared in the repository itself (best-effort).
+
+    This is intentionally generic and safe: it avoids running arbitrary scripts.
+    """
     # Python
     if language == "python":
         if Path("requirements.txt").exists():
-            run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
-        if Path("pyproject.toml").exists():
-            # install project itself (if it is a package)
-            run([sys.executable, "-m", "pip", "install", "."])
+            run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], check=False)
+        # Poetry support (if lock exists)
+        if Path("poetry.lock").exists():
+            run([sys.executable, "-m", "pip", "install", "poetry"], check=False)
+            run(["poetry", "install", "--no-interaction"], check=False)
+        # PEP 517 project install (if desired)
+        if Path("pyproject.toml").exists() and not Path("poetry.lock").exists():
+            run([sys.executable, "-m", "pip", "install", "."], check=False)
 
-    # Node
+    # Node (npm/pnpm/yarn)
     if language in ("javascript", "typescript") or Path("package.json").exists():
-        if Path("package-lock.json").exists():
-            run(["npm", "ci"], check=False)
-        elif Path("package.json").exists():
-            run(["npm", "install"], check=False)
+        pm = package_manager or "npm"
+        if pm == "pnpm":
+            run(["corepack", "enable"], check=False)
+            if Path("pnpm-lock.yaml").exists():
+                run(["pnpm", "install", "--frozen-lockfile"], check=False)
+            else:
+                run(["pnpm", "install"], check=False)
+        elif pm == "yarn":
+            run(["corepack", "enable"], check=False)
+            if Path("yarn.lock").exists():
+                run(["yarn", "install", "--immutable"], check=False)
+            else:
+                run(["yarn", "install"], check=False)
+        else:
+            if Path("package-lock.json").exists():
+                run(["npm", "ci"], check=False)
+            elif Path("package.json").exists():
+                run(["npm", "install"], check=False)
 
     # Java
     if language == "java" or Path("pom.xml").exists() or Path("gradlew").exists():
@@ -59,80 +77,70 @@ def install_repo_declared_deps(language: str) -> None:
     if language == "go" or Path("go.mod").exists():
         run(["go", "mod", "download"], check=False)
 
-def install_catalog_extras(stack: str, catalog: Dict[str, Any]) -> None:
-    if not stack:
-        return
-    spec = catalog.get(stack) or {}
-    deps = (spec.get("deps") or {})
-    pip_deps = deps.get("pip") or []
-    npm_deps = deps.get("npm") or []
-    apt_deps = deps.get("apt") or []
 
-    if apt_deps:
+def install_catalog_extras(spec) -> None:
+    # apt deps
+    if spec.deps.apt:
         run(["sudo", "apt-get", "update"], check=False)
-        run(["sudo", "apt-get", "install", "-y"] + list(apt_deps), check=False)
+        run(["sudo", "apt-get", "install", "-y"] + list(spec.deps.apt), check=False)
 
-    if pip_deps:
-        run([sys.executable, "-m", "pip", "install"] + list(pip_deps), check=False)
+    if spec.deps.pip:
+        run([sys.executable, "-m", "pip", "install"] + list(spec.deps.pip), check=False)
 
-    if npm_deps:
-        run(["npm", "install"] + list(npm_deps), check=False)
+    if spec.deps.npm:
+        pm = str(spec.meta.get("package_manager") or "npm")
+        if pm == "pnpm":
+            run(["corepack", "enable"], check=False)
+            run(["pnpm", "add"] + list(spec.deps.npm), check=False)
+        elif pm == "yarn":
+            run(["corepack", "enable"], check=False)
+            run(["yarn", "add"] + list(spec.deps.npm), check=False)
+        else:
+            run(["npm", "install"] + list(spec.deps.npm), check=False)
 
-def install_safety_nets(language: str, test_command: str, stack: str) -> None:
-    """
-    Only install minimal test runners if test_command implies them and repo doesn't declare them yet.
-    Keep this generic and minimal.
-    """
-    tc = (test_command or "").lower()
 
-    if language == "python" and ("pytest" in tc):
-        # avoid "pytest: not found"
+def install_safety_nets(spec) -> None:
+    """Install minimal test runners only if tests imply them and repo doesn't already declare."""
+    tc = (spec.commands.test or "").lower()
+
+    if spec.language == "python" and ("pytest" in tc):
         run([sys.executable, "-m", "pip", "install", "pytest"], check=False)
 
-    if language in ("javascript", "typescript") and ("jest" in tc):
-        run(["npm", "install", "jest"], check=False)
+    if spec.language in ("javascript", "typescript") and ("jest" in tc):
+        pm = str(spec.meta.get("package_manager") or "npm")
+        if pm == "pnpm":
+            run(["pnpm", "add", "-D", "jest"], check=False)
+        elif pm == "yarn":
+            run(["yarn", "add", "-D", "jest"], check=False)
+        else:
+            run(["npm", "install", "--save-dev", "jest"], check=False)
 
-    # Add small stack-specific nets where industry standard
-    if stack == "python-django":
-        # if tests use pytest-django, ensure it exists
-        run([sys.executable, "-m", "pip", "install", "django", "pytest-django"], check=False)
-
-    if stack == "python-fastapi-postgres":
-        run([sys.executable, "-m", "pip", "install", "fastapi", "httpx", "uvicorn[standard]"], check=False)
 
 def main() -> None:
-    stack = (os.environ.get("STACK") or "").strip()
-    language = (os.environ.get("LANGUAGE") or "").strip().lower()
-    test_command = (os.environ.get("TEST_COMMAND") or "").strip()
+    # The request can come from env or be inferred from repo
+    req = {
+        "stack": (os.environ.get("STACK") or "").strip(),
+        "language": (os.environ.get("LANGUAGE") or "").strip(),
+        "test_command": (os.environ.get("TEST_COMMAND") or "").strip(),
+    }
+    catalog = load_catalog()
+    spec = resolve_stack_spec(req, repo_root=".", catalog=catalog)
 
     run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=False)
 
-    # Infer language if missing
-    if not language and stack:
-        if stack.startswith("python-"):
-            language = "python"
-        elif stack.startswith("java-"):
-            language = "java"
-        elif stack.startswith("node-"):
-            language = "javascript"
-        elif stack.startswith("dotnet-"):
-            language = "dotnet"
-        elif stack.startswith("go-"):
-            language = "go"
+    pm = str(spec.meta.get("package_manager") or "")
 
-    # repo declared deps first
-    install_repo_declared_deps(language)
+    install_repo_declared_deps(spec.language, pm)
+    install_catalog_extras(spec)
+    install_safety_nets(spec)
 
-    # catalog extras next
-    catalog = load_catalog()
-    install_catalog_extras(stack, catalog)
+    print(f"STACK={spec.stack_id}")
+    print(f"LANGUAGE={spec.language}")
+    print(f"TEST_COMMAND={spec.commands.test}")
+    print(f"TOOLCHAIN_KIND={spec.toolchain.kind}")
+    print(f"TOOLCHAIN_VERSION={spec.toolchain.version}")
+    print(f"PACKAGE_MANAGER={pm}")
 
-    # minimal safety nets last
-    install_safety_nets(language, test_command, stack)
-
-    print(f"STACK={stack}")
-    print(f"LANGUAGE={language}")
-    print(f"TEST_COMMAND={test_command}")
 
 if __name__ == "__main__":
     try:

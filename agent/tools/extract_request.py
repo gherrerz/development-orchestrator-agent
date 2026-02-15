@@ -4,77 +4,55 @@ import re
 import sys
 from typing import Any, Dict
 
+from agent.stacks.registry import resolve_stack_spec
+
+
 def extract_json_from_comment(body: str) -> Dict[str, Any]:
-    """
-    Expected formats:
+    """Expected formats:
       /agent run { ...json... }
-      /agent run
       { ...json... }
     """
     if not body:
         raise ValueError("COMMENT_BODY vacío")
 
-    # find first {...} block after /agent run
     m = re.search(r"/agent\s+run\s*(\{.*\})\s*$", body.strip(), re.DOTALL)
     if not m:
-        # fallback: first {...} anywhere
         m = re.search(r"(\{.*\})", body.strip(), re.DOTALL)
     if not m:
         raise ValueError("No se encontró JSON. Usa: /agent run { ... }")
-
     raw = m.group(1)
     try:
         return json.loads(raw)
     except json.JSONDecodeError as e:
         raise ValueError(f"JSON inválido en comentario: {e}") from e
 
+
 def main() -> None:
     body = os.environ.get("COMMENT_BODY", "")
     req = extract_json_from_comment(body)
 
-    stack = (req.get("stack") or "").strip()
-    language = (req.get("language") or "").strip().lower()
-    test_command = (req.get("test_command") or "").strip()
-
-    # fallback: infer from stack prefix
-    if not language and stack:
-        if stack.startswith("python-"):
-            language = "python"
-        elif stack.startswith("java-"):
-            language = "java"
-        elif stack.startswith("node-"):
-            language = "javascript"
-        elif stack.startswith("dotnet-"):
-            language = "dotnet"
-        elif stack.startswith("go-"):
-            language = "go"
-
-    if not test_command:
-        # common defaults
-        if language == "python":
-            test_command = "pytest -q"
-        elif language in ("javascript", "typescript"):
-            test_command = "npm test"
-        elif language == "java":
-            test_command = "mvn -q test"
-        elif language in ("dotnet", "csharp"):
-            test_command = "dotnet test"
-        elif language == "go":
-            test_command = "go test ./..."
-        else:
-            test_command = ""
+    spec = resolve_stack_spec(req, repo_root=".")
 
     # Emit GitHub Actions outputs
-    # https://docs.github.com/actions/using-workflows/workflow-commands-for-github-actions
     out_path = os.environ.get("GITHUB_OUTPUT")
+    outputs = {
+        "stack": spec.stack_id,
+        "language": spec.language,
+        "test_command": spec.commands.test,
+        "toolchain_kind": spec.toolchain.kind,
+        "toolchain_version": spec.toolchain.version,
+        "package_manager": str(spec.meta.get("package_manager", "")),
+        "java_build_tool": str(spec.meta.get("java_build_tool", "")),
+    }
+
     if not out_path:
-        print(json.dumps({"stack": stack, "language": language, "test_command": test_command}))
+        print(json.dumps(outputs, ensure_ascii=False))
         return
 
     with open(out_path, "a", encoding="utf-8") as f:
-        f.write(f"stack={stack}\n")
-        f.write(f"language={language}\n")
-        f.write(f"test_command={test_command}\n")
+        for k, v in outputs.items():
+            f.write(f"{k}={v}\n")
+
 
 if __name__ == "__main__":
     try:
