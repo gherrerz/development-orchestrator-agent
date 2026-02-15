@@ -237,7 +237,7 @@ def main() -> None:
     repo_snap = snapshot(key_candidates)
 
     # Planner
-    planner_prompt = open(os.path.join(BASE_DIR, "prompts", "plan_agent.md"), "r", encoding="utf-8").read()
+    planner_prompt = open(os.path.join(BASE_DIR, "prompts", "design_agent.md"), "r", encoding="utf-8").read()
     plan = chat_json(
         system=planner_prompt,
         user=json.dumps({
