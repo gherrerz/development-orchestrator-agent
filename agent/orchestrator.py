@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Tuple
 
 from jsonschema import validate
 
-from agent.tools.github_api import get_issue
+from agent.tools.github_tools import get_issue
 from agent.tools.github_tools import git_checkout_new_branch, git_commit_all
 from agent.tools.github_tools import gh_pr_create
 from agent.tools.llm import chat_json
