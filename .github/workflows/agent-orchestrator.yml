@@ -62,16 +62,24 @@ jobs:
             pnpm-lock.yaml
             yarn.lock
 
-      - name: Setup Java
+      - name: Setup Java (no cache here; cache is conditional below)
         if: steps.req.outputs.toolchain_kind == 'java' || steps.req.outputs.language == 'java' || startsWith(steps.req.outputs.stack, 'java-')
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
           java-version: ${{ steps.req.outputs.toolchain_version != '' && steps.req.outputs.toolchain_version || '21' }}
-          cache: "maven"
 
-      - name: Cache Gradle (if needed)
-        if: steps.req.outputs.toolchain_kind == 'java'
+      - name: Cache Maven repository (only if pom.xml exists)
+        if: (steps.req.outputs.toolchain_kind == 'java' || steps.req.outputs.language == 'java' || startsWith(steps.req.outputs.stack, 'java-')) && hashFiles('**/pom.xml') != ''
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            maven-${{ runner.os }}-
+
+      - name: Cache Gradle (only if Gradle wrapper exists)
+        if: (steps.req.outputs.toolchain_kind == 'java' || steps.req.outputs.language == 'java' || startsWith(steps.req.outputs.stack, 'java-')) && (hashFiles('**/gradle-wrapper.properties') != '' || hashFiles('**/gradlew') != '')
         uses: actions/cache@v4
         with:
           path: |
