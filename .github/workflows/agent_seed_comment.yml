@@ -1,0 +1,124 @@
+name: Seed agent run comment on issue creation
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  seed-comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create initial /agent run comment from issue form fields
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.payload.issue.number;
+
+            const issueBody = (context.payload.issue.body || "").replace(/\r\n/g, "\n");
+
+            // Avoid duplicates: check existing comments for marker
+            const marker = "<!-- agent-run-seed -->";
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100
+            });
+            if (comments.some(c => (c.body || "").includes(marker))) {
+              core.info("Seed comment already exists. Skipping.");
+              return;
+            }
+
+            function escapeRegExp(s) {
+              return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            }
+
+            /**
+             * Captura el bloque bajo un heading "### <label>" hasta el siguiente "### " o fin.
+             * Issue forms normalmente generan:
+             * ### Label
+             *
+             * value...
+             */
+            function captureBlock(label) {
+              const re = new RegExp(`###\\s+${escapeRegExp(label)}\\s*\\n\\n([\\s\\S]*?)(?=\\n###\\s+|\\n?$)`, "m");
+              const m = issueBody.match(re);
+              if (!m) return "";
+              return (m[1] || "").trim();
+            }
+
+            function captureSingleLine(label) {
+              const b = captureBlock(label);
+              // tomar primera línea no vacía
+              const line = (b.split("\n").map(x => x.trim()).find(x => x.length > 0)) || "";
+              return line;
+            }
+
+            function captureLines(label) {
+              const b = captureBlock(label);
+              if (!b) return [];
+              return b
+                .split("\n")
+                .map(x => x.trim())
+                .filter(x => x.length > 0 && x !== "_No response_");
+            }
+
+            // Labels must match EXACTLY the labels in your issue form
+            const stack = captureSingleLine("Stack (libre)");
+            const language = captureSingleLine("Lenguaje (libre)");
+            const user_story = captureBlock("Historia de usuario");
+            const acceptance_criteria = captureLines("Criterios de aceptación");
+            const constraints = captureLines("Restricciones / políticas");
+            const test_command = captureSingleLine("Comando de tests");
+            const max_iterations_raw = captureSingleLine("Max iterations");
+
+            // Basic validation
+            if (!stack || !language || !user_story) {
+              core.warning("Missing required fields (stack/language/user_story). Not creating seed comment.");
+              return;
+            }
+
+            let max_iterations = parseInt(max_iterations_raw || "2", 10);
+            if (!Number.isFinite(max_iterations)) max_iterations = 2;
+
+            // keep within orchestrator schema if needed
+            // (ajusta si tu schema permite 15, etc.)
+            if (max_iterations < 1) max_iterations = 1;
+            if (max_iterations > 15) max_iterations = 15;
+
+            const runReq = {
+              stack,
+              language,
+              user_story,
+              acceptance_criteria,
+              constraints,
+              test_command: test_command || undefined,
+              max_iterations
+            };
+
+            // remove undefined keys (clean JSON)
+            Object.keys(runReq).forEach(k => runReq[k] === undefined && delete runReq[k]);
+
+            const jsonPretty = JSON.stringify(runReq, null, 2);
+
+            const commentBody =
+`${marker}
+🤖 **Agent Orchestrator — auto seed**
+
+Copia/pega este comando para ejecutar:
+
+\`\`\`
+/agent run ${jsonPretty}
+\`\`\`
+
+_Si necesitas editar algo, modifica este comentario y vuelve a ejecutar el comando._
+`;
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number,
+              body: commentBody
+            });
+
+            core.info("Seed comment created successfully.");

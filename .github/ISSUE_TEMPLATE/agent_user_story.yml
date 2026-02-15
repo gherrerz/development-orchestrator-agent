@@ -1,35 +1,33 @@
-name: "🤖 Agent: Historia de Usuario"
-description: "Define una historia de usuario para que el Agent Orchestrator la implemente vía GitHub Actions."
+name: "🤖 Agent Run Request"
+description: "Solicita al orquestador implementar una historia de usuario (multi-stack / multi-language)."
 title: "[AGENT] "
-labels:
-  - "agent:request"
-assignees: []
-
+labels: ["agent:run"]
 body:
   - type: markdown
     attributes:
       value: |
-        ## Cómo usar
-        1) Completa esta plantilla y crea el Issue.
-        2) Comenta en el Issue: **/agent run** + JSON (ver al final).
-        3) El workflow creará una rama y un PR con los cambios + evidencia de tests.
+        ## 🤖 Agent Orchestrator
+        Completa los datos. Luego, al crear el issue, comenta con:
+
+        ```
+        /agent run { ... }
+        ```
 
   - type: input
     id: stack
     attributes:
-      label: Stack objetivo
-      description: "Ej: python-fastapi-postgres, python-django, python-cli, python-lib, etc."
-      placeholder: "python-fastapi-postgres"
+      label: Stack (libre)
+      description: "Ejemplos: python-fastapi-postgres, python-django, java-spring-boot, node-express, dotnet-webapi, go-fiber, react-nextjs, angular."
+      placeholder: "p.ej. java-spring-boot"
     validations:
       required: true
 
-  - type: dropdown
+  - type: input
     id: language
     attributes:
-      label: Lenguaje
-      options:
-        - python
-      default: 0
+      label: Lenguaje (libre)
+      description: "Escribe el lenguaje que usarás. Ej: python, java, javascript, typescript, csharp, go, kotlin."
+      placeholder: "p.ej. java"
     validations:
       required: true
 
@@ -37,8 +35,8 @@ body:
     id: user_story
     attributes:
       label: Historia de usuario
-      description: "Formato recomendado: Como <rol>, quiero <capacidad>, para <beneficio>."
-      placeholder: "Como usuario, quiero autenticarme con JWT para acceder a endpoints protegidos."
+      description: "Formato recomendado: Como <rol> quiero <capacidad> para <beneficio>."
+      placeholder: "Como usuario quiero simular un crédito para conocer mi cuota mensual."
     validations:
       required: true
 
@@ -46,23 +44,22 @@ body:
     id: acceptance_criteria
     attributes:
       label: Criterios de aceptación
-      description: "Un criterio por línea."
+      description: "Uno por línea."
       placeholder: |
-        Login retorna access token JWT
-        Endpoint /me requiere token válido
-        Tests unitarios para auth
+        Incluir tests unitarios
+        Documentar endpoint / uso
+        Manejar casos borde
     validations:
       required: false
 
   - type: textarea
     id: constraints
     attributes:
-      label: Restricciones / Consideraciones
-      description: "Un ítem por línea (ej: estándares, compatibilidad, dependencias, performance, seguridad)."
+      label: Restricciones / políticas
+      description: "Uno por línea. Ej: seguir estructura actual, no romper APIs, usar linting, etc."
       placeholder: |
-        Mantener compatibilidad con Python 3.11
-        No agregar dependencias pesadas
         Seguir estructura actual del repo
+        No introducir dependencias no aprobadas
     validations:
       required: false
 
@@ -70,55 +67,38 @@ body:
     id: test_command
     attributes:
       label: Comando de tests
-      description: "Se ejecuta en GitHub Actions antes de crear el PR."
-      placeholder: "pytest -q"
-      value: "pytest -q"
+      description: "Ej: pytest -q | npm test | mvn -q test | dotnet test | go test ./..."
+      placeholder: "p.ej. mvn -q test"
     validations:
-      required: true
+      required: false
 
-  - type: input
+  - type: dropdown
     id: max_iterations
     attributes:
-      label: Máximo de iteraciones
-      description: "Cuántas vueltas de Implement/Test permite el orquestador."
-      placeholder: "2"
-      value: "2"
+      label: Max iterations
+      description: "Límite de ciclos implementador⇄tester."
+      options:
+        - "1"
+        - "2"
+        - "3"
+        - "4"
+        - "5"
     validations:
       required: true
-
-  - type: checkboxes
-    id: pr_behavior
-    attributes:
-      label: Comportamiento de entrega
-      description: "Recomendado: PR siempre (evita romper main)."
-      options:
-        - label: "Crear Pull Request (recomendado)"
-          required: true
 
   - type: markdown
     attributes:
       value: |
-        ---
-        ## Comando para ejecutar el agente
-
-        Copia/pega este bloque como comentario en el Issue, reemplazando los valores si es necesario.
-        > Tip: Puedes pegarlo tal cual y editarlo, o completarlo con lo escrito arriba.
-
-        **Comentario:**
-        ```text
-        /agent run {
-          "stack": "<STACK>",
-          "language": "python",
-          "user_story": "<HISTORIA_DE_USUARIO>",
-          "acceptance_criteria": [
-            "<CRITERIO_1>",
-            "<CRITERIO_2>"
-          ],
-          "constraints": [
-            "<RESTRICCION_1>",
-            "<RESTRICCION_2>"
-          ],
-          "test_command": "pytest -q",
-          "max_iterations": 2
+        ## ✅ Comentario para disparar el agente (copia/pega y ajusta)
+        > Nota: `language` es libre (texto). `stack` también.
+        ```json
+        {
+          "stack": "<stack>",
+          "language": "<language>",
+          "user_story": "<historia>",
+          "acceptance_criteria": ["<criterio 1>", "<criterio 2>"],
+          "constraints": ["<restriccion 1>", "<restriccion 2>"],
+          "test_command": "<comando>",
+          "max_iterations": 5
         }
         ```

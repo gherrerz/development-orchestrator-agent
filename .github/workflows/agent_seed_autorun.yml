@@ -1,0 +1,119 @@
+name: Seed + Auto-run agent on issue creation
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  seed-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create /agent run comment (auto-run) from issue form fields
+        uses: actions/github-script@v7
+        with:
+          # IMPORTANT: Use PAT so this comment can trigger the issue_comment workflow.
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.payload.issue.number;
+
+            const issueBody = (context.payload.issue.body || "").replace(/\r\n/g, "\n");
+
+            // Avoid duplicates: if comment with marker exists, skip
+            const marker = "<!-- agent-run-seed -->";
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100
+            });
+            if (comments.some(c => (c.body || "").includes(marker))) {
+              core.info("Seed comment already exists. Skipping.");
+              return;
+            }
+
+            function escapeRegExp(s) {
+              return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            }
+
+            // Captura el bloque bajo "### <label>" hasta el siguiente heading o fin.
+            function captureBlock(label) {
+              const re = new RegExp(`###\\s+${escapeRegExp(label)}\\s*\\n\\n([\\s\\S]*?)(?=\\n###\\s+|\\n?$)`, "m");
+              const m = issueBody.match(re);
+              if (!m) return "";
+              return (m[1] || "").trim();
+            }
+
+            function captureSingleLine(label) {
+              const b = captureBlock(label);
+              const line = (b.split("\n").map(x => x.trim()).find(x => x.length > 0 && x !== "_No response_")) || "";
+              return line;
+            }
+
+            function captureLines(label) {
+              const b = captureBlock(label);
+              if (!b) return [];
+              return b
+                .split("\n")
+                .map(x => x.trim())
+                .filter(x => x.length > 0 && x !== "_No response_");
+            }
+
+            // These labels must match your Issue Form labels EXACTLY
+            const stack = captureSingleLine("Stack (libre)");
+            const language = captureSingleLine("Lenguaje (libre)");
+            const user_story = captureBlock("Historia de usuario");
+            const acceptance_criteria = captureLines("Criterios de aceptación");
+            const constraints = captureLines("Restricciones / políticas");
+            const test_command = captureSingleLine("Comando de tests");
+            const max_iterations_raw = captureSingleLine("Max iterations");
+
+            if (!stack || !language || !user_story) {
+              core.warning("Missing required fields (stack/language/user_story). Not creating seed comment.");
+              return;
+            }
+
+            let max_iterations = parseInt(max_iterations_raw || "2", 10);
+            if (!Number.isFinite(max_iterations)) max_iterations = 2;
+            if (max_iterations < 1) max_iterations = 1;
+            if (max_iterations > 15) max_iterations = 15; // keep sane; align with your schema
+
+            const runReq = {
+              stack,
+              language,
+              user_story,
+              acceptance_criteria,
+              constraints,
+              test_command: test_command || undefined,
+              max_iterations
+            };
+
+            // remove undefined keys
+            Object.keys(runReq).forEach(k => runReq[k] === undefined && delete runReq[k]);
+
+            const jsonPretty = JSON.stringify(runReq, null, 2);
+
+            // IMPORTANT: Comment must START with "/agent run { ... }" to trigger your issue_comment workflow
+            const commentBody =
+`/agent run ${jsonPretty}
+
+${marker}
+🤖 **Agent Orchestrator — auto-run**
+
+Este comentario fue generado automáticamente desde el Issue Form.
+Si necesitas ajustar algo, edita el JSON y vuelve a comentar con \`/agent run { ... }\`.
+
+**Resumen**
+- stack: \`${stack}\`
+- language: \`${language}\`
+- test_command: \`${test_command || "(default)"}\`
+- max_iterations: \`${max_iterations}\`
+`;
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number,
+              body: commentBody
+            });
+
+            core.info("Auto-run comment created successfully (should trigger issue_comment workflow).");
