@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Tuple
 from jsonschema import validate
 
 from agent.tools.github_tools import get_issue
-from agent.tools.github_tools import git_checkout_new_branch, git_commit_all
+from agent.tools.github_tools import create_branch, git_commit_all
 from agent.tools.github_tools import gh_pr_create
 from agent.tools.llm import chat_json
 from agent.tools.patch_apply import apply_patch_object
@@ -258,7 +258,7 @@ def main() -> None:
     max_iterations = int(run_req.get("max_iterations", 2))
     base_branch = "main"
     branch_name = f"agent/issue-{issue_number}"
-    git_checkout_new_branch(branch_name)
+    create_branch(branch_name)
 
     impl_prompt = open(os.path.join(BASE_DIR, "prompts", "implement_agent.md"), "r", encoding="utf-8").read()
     test_prompt = open(os.path.join(BASE_DIR, "prompts", "test_agent.md"), "r", encoding="utf-8").read()
