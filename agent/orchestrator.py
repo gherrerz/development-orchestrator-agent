@@ -637,6 +637,13 @@ def main() -> None:
 
         # Detect changes (tracked + untracked)
         changed_files = detect_repo_changes()
+        changed_text = "\n".join(changed_files)
+
+        write_out(f"agent/out/iter_{i}_changed_files.txt", changed_text)
+
+        if not changed_files:
+            iteration_notes.append(f"Iteración {i}: sin cambios detectados (skip)")
+            continue
 
         # Debug: guarda status completo
         _, status_porcelain = run_cmd("git status --porcelain")
@@ -675,10 +682,11 @@ def main() -> None:
             repo,
             issue_number,
             "iteration",
-            f"iter={i}\nchanged=\n{changed}\n\nexit={test_exit}\n\n{test_out[:4000]}",
+            f"iter={i}\nchanged_files=\n{changed_text}\n\nexit={test_exit}\n\n{test_out[:4000]}",
             {
                 "iteration": i,
                 "exit": int(test_exit),
+                "changed_files_count": len(changed_files),
                 "stack": run_req.get("stack"),
                 "language": run_req.get("language"),
             }
