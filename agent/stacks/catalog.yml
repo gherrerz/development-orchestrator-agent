@@ -131,7 +131,7 @@ java-spring-boot:
   deps:
     apt: [maven]
   commands:
-    test: "mvn -q test"
+    test: "mvn -Dstyle.color=never test"
     build: "mvn -q -DskipTests package"
   allowed_test_prefixes:
     - "mvn test"

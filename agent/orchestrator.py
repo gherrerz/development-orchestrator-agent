@@ -458,6 +458,76 @@ def _attempt_plan_repair_once(
     return repaired
 
 
+def discover_maven_surefire_tests() -> Dict[str, Any]:
+    """
+    Lee target/surefire-reports/TEST-*.xml y devuelve:
+      - total tests, failures, errors, skipped
+      - lista de clases detectadas
+      - lista corta de testcases (class#name)
+    """
+    import glob
+    import xml.etree.ElementTree as ET
+
+    reports_dir = "target/surefire-reports"
+    xml_files = sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml")))
+    if not xml_files:
+        return {
+            "reports_dir": reports_dir,
+            "xml_files": [],
+            "total": 0,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "classes": [],
+            "testcases": [],
+            "note": "No surefire XML reports found (maybe tests didn't run, or different runner).",
+        }
+
+    total = failures = errors = skipped = 0
+    classes = set()
+    testcases = []
+
+    for xf in xml_files:
+        try:
+            root = ET.parse(xf).getroot()
+            # root is <testsuite>
+            cls = root.attrib.get("name", "")
+            if cls:
+                classes.add(cls)
+
+            t = int(root.attrib.get("tests", "0") or 0)
+            f = int(root.attrib.get("failures", "0") or 0)
+            e = int(root.attrib.get("errors", "0") or 0)
+            s = int(root.attrib.get("skipped", "0") or 0)
+
+            total += t
+            failures += f
+            errors += e
+            skipped += s
+
+            # collect some testcases (bounded)
+            for tc in root.findall(".//testcase"):
+                cname = tc.attrib.get("classname", cls) or cls
+                name = tc.attrib.get("name", "")
+                if cname or name:
+                    testcases.append(f"{cname}#{name}")
+                if len(testcases) >= 200:
+                    break
+        except Exception:
+            continue
+
+    return {
+        "reports_dir": reports_dir,
+        "xml_files": xml_files[:50],
+        "total": total,
+        "failures": failures,
+        "errors": errors,
+        "skipped": skipped,
+        "classes": sorted(classes),
+        "testcases": testcases[:200],
+    }
+
+
 def main() -> None:
     repo = os.environ["REPO"]
     issue_number = str(os.environ["ISSUE_NUMBER"])
@@ -651,6 +721,33 @@ def main() -> None:
         test_cmd = run_req.get("test_command") or ""
         test_exit, test_out = run_cmd(test_cmd)
         write_out("agent/out/last_test_output.txt", test_out)
+
+        # --- ENTERPRISE: Java test discovery (Surefire) ---
+        if str(run_req.get("stack") or "").startswith("java-") or (run_req.get("language") or "").lower() == "java":
+            surefire = discover_maven_surefire_tests()
+            write_out(f"agent/out/iter_{i}_surefire.json", json.dumps(surefire, ensure_ascii=False, indent=2))
+
+            # Optional: detect if the agent-created tests actually ran
+            expected_tests = []
+            files_map = patch_obj.get("files") if isinstance(patch_obj.get("files"), dict) else {}
+            for pth in files_map.keys():
+                p_norm = pth.strip()
+                if p_norm.startswith("./"):
+                    p_norm = p_norm[2:]
+                p_norm = os.path.normpath(p_norm)
+                if p_norm.startswith(os.path.join("src", "test", "java")) and p_norm.endswith(".java"):
+                    # map path -> FQN guess: src/test/java/a/b/C.java => a.b.C
+                    rel = p_norm[len(os.path.join("src", "test", "java")) + 1 :]
+                    fqn = rel[:-5].replace(os.sep, ".")
+                    expected_tests.append(fqn)
+
+            if expected_tests:
+                ran_classes = set(surefire.get("classes") or [])
+                missing = [t for t in expected_tests if t not in ran_classes]
+                write_out(
+                    f"agent/out/iter_{i}_expected_tests.json",
+                    json.dumps({"expected": expected_tests, "missing_in_surefire": missing}, ensure_ascii=False, indent=2),
+                )
 
         # FAILURE HINTS
         try:
