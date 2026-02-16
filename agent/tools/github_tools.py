@@ -24,7 +24,17 @@ def git_status_porcelain() -> str:
 
 def git_commit_all(message: str) -> None:
     run(["git", "add", "-A"])
-    run(["git", "commit", "-m", message])
+    try:
+        run(["git", "commit", "-m", message])
+    except RuntimeError as e:
+        msg = str(e)
+        if "Author identity unknown" in msg or "empty ident name" in msg:
+            # Configure identity locally (no global)
+            run(["git", "config", "user.name", "github-actions[bot]"])
+            run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+            run(["git", "commit", "-m", message])
+            return
+        raise
 
 def git_push(branch: str) -> None:
     run(["git", "push", "origin", branch])
