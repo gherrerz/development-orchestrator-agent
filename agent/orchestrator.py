@@ -199,28 +199,65 @@ def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def normalize_patch(p: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normaliza el patch para cumplir patch.schema.json de manera robusta:
+    - Si viene envuelto como {"patch": {...}}, lo desempaqueta.
+    - Mantiene 'notes' siempre presente.
+    - 'patches' solo se incluye si tiene al menos 1 item válido.
+    - 'files' solo se incluye si tiene al menos 1 entrada válida.
+    - Evita 'patches': [] porque rompe schema (minItems: 1) cuando está presente.
+    """
     if isinstance(p, dict) and "patch" in p and isinstance(p["patch"], dict):
         p = p["patch"]
 
-    if "patches" not in p and "files" in p and isinstance(p["files"], dict):
-        p = {"patches": [], "notes": [], "files": p["files"]}
+    out: Dict[str, Any] = {}
+    out["notes"] = p.get("notes") if isinstance(p.get("notes"), list) else []
 
-    if "patches" not in p:
-        p["patches"] = []
-    if "notes" not in p:
-        p["notes"] = []
+    # ---- files ----
+    files = p.get("files")
+    cleaned_files: Dict[str, Any] = {}
 
-    patches = []
-    for item in (p.get("patches") or []):
-        if not isinstance(item, dict):
-            continue
-        path = item.get("path")
-        diff = item.get("diff")
-        if isinstance(path, str) and isinstance(diff, str):
-            patches.append({"path": path, "diff": diff})
-    p["patches"] = patches
+    if isinstance(files, dict):
+        for path, val in files.items():
+            if not isinstance(path, str) or not path.strip():
+                continue
 
-    return p
+            # allow string content shorthand
+            if isinstance(val, str):
+                cleaned_files[path] = val
+                continue
+
+            # allow object form with {operation, content}
+            if isinstance(val, dict):
+                content = val.get("content")
+                if not isinstance(content, str):
+                    continue
+                op = val.get("operation") or "modify"
+                if op not in ("add", "modify", "delete"):
+                    op = "modify"
+                cleaned_files[path] = {"operation": op, "content": content}
+
+    if cleaned_files:
+        out["files"] = cleaned_files
+
+    # ---- patches ----
+    patches_in = p.get("patches") or []
+    cleaned_patches: List[Dict[str, str]] = []
+    if isinstance(patches_in, list):
+        for item in patches_in:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            diff = item.get("diff")
+            if isinstance(path, str) and path.strip() and isinstance(diff, str) and len(diff) >= 10:
+                cleaned_patches.append({"path": path, "diff": diff})
+
+    # Solo incluir patches si hay >=1 (evita patches: [])
+    if cleaned_patches:
+        out["patches"] = cleaned_patches
+
+    # Nota: no agregamos keys extra para no violar additionalProperties:false
+    return out
 
 
 def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[str, Any]:
