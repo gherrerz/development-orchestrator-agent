@@ -2,7 +2,40 @@ import os
 import re
 import tempfile
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+
+# -----------------------------
+# Path hardening (enterprise)
+# -----------------------------
+def _normalize_rel_path(path: str) -> str:
+    p = (path or "").strip()
+    if p.startswith("./"):
+        p = p[2:]
+    # Normalize separators + remove redundant segments
+    p = os.path.normpath(p)
+    # Prevent weird normpath outputs
+    if p in (".", ""):
+        return ""
+    return p
+
+
+def _is_safe_rel_path(path: str) -> Tuple[bool, str]:
+    """
+    Only allow writing within repo workspace:
+      - must be relative
+      - no absolute paths
+      - no parent traversal
+    """
+    p = _normalize_rel_path(path)
+    if not p:
+        return False, "empty path"
+    if os.path.isabs(p):
+        return False, "absolute path not allowed"
+    # normpath can yield ".." or start with ".." for traversal
+    if p == ".." or p.startswith(".." + os.sep) or p.startswith("../"):
+        return False, "path traversal not allowed"
+    return True, p
 
 
 def ensure_parent_dir(path: str) -> None:
@@ -76,42 +109,102 @@ def is_new_file_diff(diff_text: str) -> bool:
     return ("new file mode" in diff_text) or ("--- /dev/null" in diff_text)
 
 
+def _coerce_file_entry(val: Any) -> Optional[Dict[str, str]]:
+    """
+    Normalize one files{} entry to the canonical shape:
+      {"operation": "add|modify|delete", "content": "<str>"}
+    Accepts:
+      - string content
+      - dict {"content": "...", "operation": "..."}
+    """
+    if isinstance(val, str):
+        return {"operation": "modify", "content": val}
+
+    if isinstance(val, dict):
+        content = val.get("content")
+        if content is None:
+            # If delete, content is optional
+            op = str(val.get("operation") or "modify").strip().lower()
+            if op == "delete":
+                return {"operation": "delete", "content": ""}
+            return None
+        if not isinstance(content, str):
+            return None
+        op = str(val.get("operation") or "modify").strip().lower()
+        if op not in ("add", "modify", "delete"):
+            op = "modify"
+        return {"operation": op, "content": content}
+
+    return None
+
+
 def apply_patch_object(patch_obj: Dict[str, Any]) -> None:
     """Apply a patch object. Supports:
 
-    1) Modern full-content format:
-       { "files": { "path/to/file": "full content", ... }, "notes": [...] }
+    1) Modern full-content format (recommended):
+       { "files": { "path/to/file": "full content" OR {"operation": "...","content":"..."}, ... },
+         "notes": [...] }
 
     2) Unified diff format:
        { "patches": [ { "path": "...", "diff": "..." }, ... ], "notes": [...] }
 
-    Security + robustness rule:
-      - Prefer git apply for diffs.
-      - If git apply fails, only fallback to reconstructing content for *new file add-only* diffs.
-      - Otherwise fail with a clear error asking the LLM to output files{}.
+    Enterprise rules:
+      - Full-content files{} is the most robust and language-agnostic.
+      - In files{} mode we support operation add/modify/delete.
+      - UPSERT semantics: operation=modify on missing file -> treat as add.
+      - Path hardening: reject abs / traversal paths.
+      - For diffs: prefer git apply; fallback ONLY for new-file add-only diffs.
     """
     if not isinstance(patch_obj, dict):
         raise ValueError("Patch debe ser un objeto JSON.")
 
-    # Full-content mode is the most robust and language-agnostic.
+    # -----------------------
+    # Full-content files{} mode
+    # -----------------------
     files_obj = patch_obj.get("files")
     if isinstance(files_obj, dict) and files_obj:
-        for path, content in files_obj.items():
-            if not isinstance(path, str) or not isinstance(content, str):
+        for raw_path, raw_val in files_obj.items():
+            if not isinstance(raw_path, str) or not raw_path.strip():
                 continue
-            if content.strip().lower() in ("(archivo vacío)", "(archivo vacio)"):
-                write_file(path, "")
+
+            ok, p = _is_safe_rel_path(raw_path)
+            if not ok:
+                raise RuntimeError(f"Ruta de archivo inválida o insegura: '{raw_path}' ({p})")
+
+            entry = _coerce_file_entry(raw_val)
+            if not entry:
+                # ignore invalid entry (but do not crash)
+                continue
+
+            op = entry["operation"]
+            content = entry["content"]
+
+            # Empty file marker (compat)
+            if isinstance(content, str) and content.strip().lower() in ("(archivo vacío)", "(archivo vacio)"):
+                content = ""
+
+            # UPSERT: modify on missing -> add
+            if op == "modify" and not os.path.exists(p):
+                op = "add"
+
+            if op == "delete":
+                delete_file(p)
             else:
-                write_file(path, content)
-        # deletions (optional)
+                write_file(p, content)
+
+        # deletions (optional legacy)
         deletions = patch_obj.get("delete")
         if isinstance(deletions, list):
-            for p in deletions:
-                if isinstance(p, str):
-                    delete_file(p)
+            for raw_p in deletions:
+                if isinstance(raw_p, str):
+                    ok, p = _is_safe_rel_path(raw_p)
+                    if ok:
+                        delete_file(p)
         return
 
+    # -----------------------
     # Unified diff mode
+    # -----------------------
     patches = patch_obj.get("patches") or []
     if not isinstance(patches, list):
         raise ValueError("patches debe ser una lista.")
@@ -119,9 +212,11 @@ def apply_patch_object(patch_obj: Dict[str, Any]) -> None:
     for item in patches:
         if not isinstance(item, dict):
             continue
-        diff_text = str(item.get("diff", "") or "")
-        path = str(item.get("path", "") or "").strip()
 
+        diff_text = str(item.get("diff", "") or "")
+        raw_path = str(item.get("path", "") or "").strip()
+
+        # Prefer git apply when possible
         if diff_text and looks_like_valid_unified_diff(diff_text):
             try:
                 try_git_apply(diff_text)
@@ -130,13 +225,17 @@ def apply_patch_object(patch_obj: Dict[str, Any]) -> None:
                 # fallthrough to safe fallback
                 pass
 
-        if not path:
-            path = extract_target_path_from_headers(diff_text) or ""
-        if not path:
+        if not raw_path:
+            raw_path = extract_target_path_from_headers(diff_text) or ""
+        if not raw_path:
             raise RuntimeError(
                 "Patch inválido: no se pudo determinar 'path'. "
                 "Para máxima robustez, emite formato files{} con contenido completo."
             )
+
+        ok, path = _is_safe_rel_path(raw_path)
+        if not ok:
+            raise RuntimeError(f"Ruta de archivo inválida o insegura: '{raw_path}' ({path})")
 
         # Explicit empty-file marker
         if "(archivo vacío)" in diff_text or "(archivo vacio)" in diff_text:

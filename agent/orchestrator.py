@@ -94,18 +94,10 @@ def _coerce_test_strategy(v: Any) -> str:
 def _mk_task_id(i: int, title: str, desc: str) -> str:
     base = f"{i}:{title}:{desc}"
     h = hashlib.sha1(base.encode("utf-8", errors="ignore")).hexdigest()[:8]
-    # T01-xxxxxxxx  (minLength garantizado)
     return f"T{i:02d}-{h}"
 
 
-
 def _repair_tasks(tasks_val: Any) -> List[Dict[str, str]]:
-    """
-    Enforce schema for tasks[] items:
-      {id,title,description} only (strings)
-    - If missing id/title, derive them.
-    - If extra fields exist, fold them into description so info isn't lost.
-    """
     if tasks_val is None:
         return []
     if isinstance(tasks_val, dict):
@@ -148,7 +140,6 @@ def _repair_tasks(tasks_val: Any) -> List[Dict[str, str]]:
         if not tid or len(tid) < 3:
             tid = _mk_task_id(idx, title, desc)
 
-        # Si el LLM trae un id corto (p.ej. "T2"), fuerza uno válido por schema
         if len(tid) < 3:
             tid = _mk_task_id(idx, title, desc)
 
@@ -158,12 +149,6 @@ def _repair_tasks(tasks_val: Any) -> List[Dict[str, str]]:
 
 
 def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Robust plan normalization:
-    - filter keys not in schema
-    - coerce types for strict fields
-    - repair tasks[] items to comply required fields and forbid extras
-    """
     allowed_props = (PLAN_SCHEMA.get("properties") or {})
     allowed_keys = set(allowed_props.keys())
 
@@ -199,26 +184,16 @@ def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def normalize_patch(p: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Normaliza el patch para cumplir patch.schema.json de manera robusta:
-    - Desempaqueta {"patch": {...}} si viene así.
-    - 'notes' siempre lista de strings.
-    - Incluye 'files' si tiene al menos 1 archivo válido.
-    - Incluye 'patches' SOLO si tiene >=1 item válido.
-    - Elimina explícitamente 'patches' si viene vacío (parche anti-bombas).
-    """
     if isinstance(p, dict) and "patch" in p and isinstance(p["patch"], dict):
         p = p["patch"]
 
     out: Dict[str, Any] = {}
 
-    # notes
     notes = p.get("notes", [])
     if not isinstance(notes, list):
         notes = []
     out["notes"] = [str(x) for x in notes if isinstance(x, (str, int, float, bool))]
 
-    # files
     cleaned_files: Dict[str, Any] = {}
     files = p.get("files")
     if isinstance(files, dict):
@@ -232,17 +207,22 @@ def normalize_patch(p: Dict[str, Any]) -> Dict[str, Any]:
 
             if isinstance(val, dict):
                 content = val.get("content")
-                if not isinstance(content, str):
-                    continue
                 op = val.get("operation") or "modify"
                 if op not in ("add", "modify", "delete"):
                     op = "modify"
+
+                # delete op: allow missing content
+                if op == "delete":
+                    cleaned_files[path] = {"operation": "delete", "content": val.get("content") or ""}
+                    continue
+
+                if not isinstance(content, str):
+                    continue
                 cleaned_files[path] = {"operation": op, "content": content}
 
     if cleaned_files:
         out["files"] = cleaned_files
 
-    # patches (solo si hay >=1 válido)
     patches_in = p.get("patches")
     cleaned_patches: List[Dict[str, str]] = []
     if isinstance(patches_in, list):
@@ -261,21 +241,17 @@ def normalize_patch(p: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[str, Any]:
-    # Unwrap si viene anidado
     if isinstance(tr, dict) and "test_report" in tr and isinstance(tr["test_report"], dict):
         tr = tr["test_report"]
 
     passed = bool(tr.get("passed", False))
     summary = str(tr.get("summary") or "")[:4000]
 
-    # failure_hints: siempre lista[str]
     fh = tr.get("failure_hints", [])
     if not isinstance(fh, list):
         fh = []
     fh = [str(x) for x in fh if isinstance(x, (str, int, float, bool))][:50]
 
-    # acceptance_criteria_status: preferir lo que venga del agente si es válido,
-    # pero normalizar claves y tipos para cumplir schema (criterion/met/evidence)
     normalized_ac: List[Dict[str, Any]] = []
     ac_items = tr.get("acceptance_criteria_status")
 
@@ -283,12 +259,9 @@ def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[s
         for item in ac_items:
             if not isinstance(item, dict):
                 continue
-
-            # Compat: algunos modelos devuelven "criteria" en vez de "criterion"
             crit = item.get("criterion", None)
             if crit is None:
                 crit = item.get("criteria", None)
-
             if crit is None:
                 continue
 
@@ -299,12 +272,8 @@ def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[s
                 met = bool(met)
 
             evidence = str(item.get("evidence") or "")[:1200]
+            normalized_ac.append({"criterion": str(crit), "met": met, "evidence": evidence})
 
-            normalized_ac.append(
-                {"criterion": str(crit), "met": met, "evidence": evidence}
-            )
-
-    # Si no vino lista válida, derivarla desde el run_request (siempre schema-compliant)
     if not normalized_ac:
         ac = run_req.get("acceptance_criteria", []) or []
         normalized_ac = [{"criterion": str(c), "met": passed, "evidence": summary[:400]} for c in ac]
@@ -316,20 +285,13 @@ def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[s
         "acceptance_criteria_status": normalized_ac,
     }
 
-    # -------------------------------
-    # ENTERPRISE HARDENING:
-    # recommended_patch es opcional y NUNCA debe romper el schema.
-    # Si viene vacío, inválido o sin files/patches, lo descartamos.
-    # -------------------------------
     rp = tr.get("recommended_patch", None)
     if isinstance(rp, dict):
         rp_norm = normalize_patch(rp)
 
-        # Hard guard: no permitir patches vacíos
         if "patches" in rp_norm and (not isinstance(rp_norm["patches"], list) or len(rp_norm["patches"]) == 0):
             rp_norm.pop("patches", None)
 
-        # Asegura notes (schema requiere notes si recommended_patch existe)
         notes = rp_norm.get("notes", [])
         if not isinstance(notes, list):
             notes = []
@@ -338,10 +300,8 @@ def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[s
         has_files = isinstance(rp_norm.get("files"), dict) and len(rp_norm.get("files")) > 0
         has_patches = isinstance(rp_norm.get("patches"), list) and len(rp_norm.get("patches")) > 0
 
-        # Solo incluir si cumple oneOf (files o patches) y tiene notes
         if has_files or has_patches:
             out["recommended_patch"] = rp_norm
-        # else: descartar silenciosamente
 
     return out
 
@@ -361,14 +321,16 @@ def is_safe_test_command(cmd: str, allowed_prefixes: List[str]) -> bool:
     return any(normalized.startswith(a) for a in allowed)
 
 
+def run_cmd(cmd: str) -> Tuple[int, str]:
+    args = shlex.split(cmd)
+    p = subprocess.run(args, text=True, capture_output=True)
+    out = (p.stdout or "") + "\n" + (p.stderr or "")
+    return p.returncode, out
+
+
 def detect_repo_changes() -> List[str]:
-    """
-    Detecta cambios en el working tree incluyendo archivos untracked.
-    Devuelve una lista estable (ordenada) de paths.
-    """
     changed: set[str] = set()
 
-    # Cambios en archivos tracked
     code, out = run_cmd("git diff --name-only")
     if code == 0:
         for line in (out or "").splitlines():
@@ -376,29 +338,18 @@ def detect_repo_changes() -> List[str]:
             if line:
                 changed.add(line)
 
-    # Untracked + staged + modified (porcelain)
     code, st = run_cmd("git status --porcelain")
     if code == 0:
         for line in (st or "").splitlines():
-            # Formatos típicos:
-            # " M file", "M  file", "?? file", "A  file"
             if not line.strip():
                 continue
             path = line[3:].strip() if len(line) >= 4 else ""
             if path:
-                # Soporta rename "old -> new"
                 if " -> " in path:
                     path = path.split(" -> ", 1)[1].strip()
                 changed.add(path)
 
     return sorted(changed)
-
-
-def run_cmd(cmd: str) -> Tuple[int, str]:
-    args = shlex.split(cmd)
-    p = subprocess.run(args, text=True, capture_output=True)
-    out = (p.stdout or "") + "\n" + (p.stderr or "")
-    return p.returncode, out
 
 
 def compact_memories(matches: List[Dict[str, Any]]) -> str:
@@ -435,10 +386,10 @@ def write_out(path: str, content: str) -> None:
 
 def render_summary_md(issue_title: str, pr_url: str, iteration_notes: List[str], test_report: Dict[str, Any]) -> str:
     md = []
-    md.append(f"## 🤖 Agent 결과\n")
-    md.append(f"**Issue:** {issue_title}\n")
+    md.append("## 🤖 Agent 결과\n\n")
+    md.append(f"**Issue:** {issue_title}\n\n")
     if pr_url:
-        md.append(f"**PR:** {pr_url}\n")
+        md.append(f"**PR:** {pr_url}\n\n")
     md.append("\n---\n")
     md.append("### Iteraciones\n")
     for n in iteration_notes:
@@ -476,13 +427,8 @@ def _attempt_plan_repair_once(
     repo_snap: Dict[str, str],
     memories: str,
 ) -> Dict[str, Any]:
-    """
-    Enterprise fallback: one-shot schema repair using LLM, forced to plan.schema.json.
-    If the model still fails schema validation, caller aborts with clear error.
-    """
     repair_prompt = _load_prompt("repair_plan_agent.md")
 
-    # Persist invalid input + error for auditability
     write_out("agent/out/plan_invalid.json", json.dumps(invalid_plan, ensure_ascii=False, indent=2))
     write_out("agent/out/plan_validation_error.txt", validation_error)
 
@@ -504,15 +450,11 @@ def _attempt_plan_repair_once(
                 "memories": memories,
             }
         }, ensure_ascii=False),
-        schema_name="plan.schema.json",  # hard enforcement
+        schema_name="plan.schema.json",
     )
 
-    # Normalize (still) and return
     repaired = normalize_plan(repaired)
-
-    # Persist repaired plan for auditability
     write_out("agent/out/plan_repaired.json", json.dumps(repaired, ensure_ascii=False, indent=2))
-
     return repaired
 
 
@@ -569,9 +511,7 @@ def main() -> None:
     impl_prompt = _load_prompt("implement_agent.md")
     test_prompt = _load_prompt("test_agent.md")
 
-    # ---------------------------
-    # Planner -> Plan (with enterprise repair fallback, max 1)
-    # ---------------------------
+    # Planner -> Plan (repair max 1)
     plan_raw = chat_json(
         system=planner_prompt,
         user=json.dumps({
@@ -594,7 +534,6 @@ def main() -> None:
     try:
         safe_validate(plan, PLAN_SCHEMA, "plan.schema.json")
     except ValueError as e:
-        # one-shot repair
         if repaired_once:
             raise
         repaired_once = True
@@ -612,7 +551,6 @@ def main() -> None:
         try:
             safe_validate(plan, PLAN_SCHEMA, "plan.schema.json")
         except ValueError as e2:
-            # Abort clearly: enterprise policy
             write_out("agent/out/plan_repair_failed.txt", str(e2))
             raise ValueError(
                 "Plan inválido incluso después de 1 intento de repair. "
@@ -675,50 +613,41 @@ def main() -> None:
             schema_name="patch.schema.json",
         )
 
-        # --- DEBUG ENTERPRISE: guardar patch crudo del LLM ---
+        # DEBUG: patch crudo
         write_out(
             f"agent/out/iter_{i}_patch_from_llm.json",
             json.dumps(patch_obj, ensure_ascii=False, indent=2),
         )
-        
-        # Normalización robusta
+
         patch_obj = normalize_patch(patch_obj)
 
-        # HARD GUARD: nunca permitas patches vacíos
+        # Hard guard: no permitir patches vacíos
         if "patches" in patch_obj and (not isinstance(patch_obj["patches"], list) or len(patch_obj["patches"]) == 0):
             patch_obj.pop("patches", None)
 
         safe_validate(patch_obj, PATCH_SCHEMA, "patch.schema.json")
 
-
         apply_patch_object(patch_obj)
 
-        # --- Enterprise debug: guarda el patch de la iteración ---
+        # patch normalizado aplicado
         write_out(f"agent/out/iter_{i}_patch.json", json.dumps(patch_obj, ensure_ascii=False, indent=2))
 
-        # Detect changes (tracked + untracked)
+        # Detect changes
         changed_files = detect_repo_changes()
         changed_text = "\n".join(changed_files)
-
         write_out(f"agent/out/iter_{i}_changed_files.txt", changed_text)
 
         if not changed_files:
             iteration_notes.append(f"Iteración {i}: sin cambios detectados (skip)")
             continue
 
-        # Debug: guarda status completo
+        # git status debug
         _, status_porcelain = run_cmd("git status --porcelain")
         write_out(f"agent/out/iter_{i}_git_status.txt", status_porcelain)
 
-        write_out(f"agent/out/iter_{i}_changed_files.txt", "\n".join(changed_files))
-
-        if not changed_files:
-            iteration_notes.append(f"Iteración {i}: sin cambios detectados (skip)")
-            continue
-
         git_commit_all(f"agent: implement issue {issue_number} (iter {i})")
 
-        # RUN TESTS (SIN SHELL)
+        # RUN TESTS (sin shell)
         test_cmd = run_req.get("test_command") or ""
         test_exit, test_out = run_cmd(test_cmd)
         write_out("agent/out/last_test_output.txt", test_out)
@@ -731,14 +660,11 @@ def main() -> None:
                 stack=str(run_req.get("stack") or ""),
             )
             hints = summarize_hints(meta)
-            write_out(
-                "agent/out/failure_hints.json",
-                json.dumps(hints, ensure_ascii=False, indent=2)
-            )
+            write_out("agent/out/failure_hints.json", json.dumps(hints, ensure_ascii=False, indent=2))
         except Exception:
             hints = []
 
-        # Correct pinecone upsert after tests
+        # Pinecone upsert after tests
         pine_upsert_event(
             repo,
             issue_number,
@@ -776,15 +702,11 @@ def main() -> None:
 
         iteration_notes.append(f"Iteración {i}: test exit={test_exit}")
 
-        # Optional: stuck detection (kept, but not aborting hard here)
         failure_sig = stable_failure_signature(test_exit, test_out)
 
-        # should_count_as_stuck signature hardening:
-        # Newer versions expect (last_sig, current_sig, changed_files)
         try:
             stuck = should_count_as_stuck(last_failure_sig, failure_sig, changed_text)
         except TypeError:
-            # Backwards compatibility if function takes only 2 args
             stuck = should_count_as_stuck(last_failure_sig, failure_sig)
 
         if stuck:
