@@ -261,15 +261,12 @@ def normalize_patch(p: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[str, Any]:
+    # Unwrap si viene anidado
     if isinstance(tr, dict) and "test_report" in tr and isinstance(tr["test_report"], dict):
         tr = tr["test_report"]
 
-    if all(k in tr for k in ("passed", "summary")):
-        passed = bool(tr.get("passed"))
-        summary = str(tr.get("summary") or "")
-    else:
-        passed = False
-        summary = str(tr)[:1000]
+    passed = bool(tr.get("passed", False))
+    summary = str(tr.get("summary") or "")[:4000]
 
     ac = run_req.get("acceptance_criteria", []) or []
     ac_list = [{"criteria": c, "met": passed, "evidence": summary[:400]} for c in ac]
@@ -277,11 +274,36 @@ def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[s
     out: Dict[str, Any] = {
         "passed": passed,
         "summary": summary,
-        "failure_hints": tr.get("failure_hints", []),
+        "failure_hints": tr.get("failure_hints", []) if isinstance(tr.get("failure_hints", []), list) else [],
         "acceptance_criteria_status": ac_list,
     }
-    if "recommended_patch" in tr:
-        out["recommended_patch"] = tr["recommended_patch"]
+
+    # -------------------------------
+    # ENTERPRISE HARDENING:
+    # recommended_patch es opcional y NUNCA debe romper el schema.
+    # Si viene vacío, inválido o sin notes, lo descartamos.
+    # -------------------------------
+    rp = tr.get("recommended_patch", None)
+    if isinstance(rp, dict):
+        # Normaliza usando normalize_patch (la misma que usas para implementación)
+        rp_norm = normalize_patch(rp)
+
+        # Hard guard: no permitir patches vacíos
+        if "patches" in rp_norm and (not isinstance(rp_norm["patches"], list) or len(rp_norm["patches"]) == 0):
+            rp_norm.pop("patches", None)
+
+        # Si no tiene files ni patches, descartar
+        has_files = isinstance(rp_norm.get("files"), dict) and len(rp_norm.get("files")) > 0
+        has_patches = isinstance(rp_norm.get("patches"), list) and len(rp_norm.get("patches")) > 0
+
+        # Asegura notes
+        if "notes" not in rp_norm:
+            rp_norm["notes"] = []
+
+        if has_files or has_patches:
+            out["recommended_patch"] = rp_norm
+        # else: descartar silenciosamente (no romper orquestador)
+
     return out
 
 
