@@ -236,20 +236,41 @@ def summarize_hints(meta: FailureMeta, limit: int = 8) -> List[str]:
     return uniq
 
 
-def should_count_as_stuck(prev_signature: str, new_signature: str, changed_files: str) -> bool:
+def should_count_as_stuck(prev_signature: str, new_signature: str, changed_files) -> bool:
     """
-    Stuck is only true if:
+    Stuck is true only if:
       - signature repeats AND
-      - changed_files (set) hasn't changed meaningfully
+      - there were no meaningful code changes
+
+    Robust: accepts changed_files as:
+      - str (newline-separated)
+      - list[str]
+      - None
     """
     if not prev_signature or not new_signature:
         return False
     if prev_signature != new_signature:
         return False
 
-    if not (changed_files or "").strip():
+    # Normalize changed_files into a sorted list[str]
+    files_list: List[str] = []
+    if changed_files is None:
+        files_list = []
+    elif isinstance(changed_files, list):
+        files_list = [str(f).strip() for f in changed_files if str(f).strip()]
+    else:
+        # assume string-like
+        s = str(changed_files or "")
+        # If it's an empty/whitespace string => no changes
+        if not s.strip():
+            files_list = []
+        else:
+            files_list = [f.strip() for f in s.splitlines() if f.strip()]
+
+    # If no changed files, we're stuck when signature repeats
+    if not files_list:
         return True
 
-    files = sorted([f.strip() for f in (changed_files or "").splitlines() if f.strip()])
-    files_sig = "|".join(files)
-    return bool(files_sig)
+    # If there are changed files, we consider it not-stuck (work is happening)
+    # (You can tighten this heuristic later if needed.)
+    return False

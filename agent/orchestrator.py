@@ -782,7 +782,7 @@ def main() -> None:
         # should_count_as_stuck signature hardening:
         # Newer versions expect (last_sig, current_sig, changed_files)
         try:
-            stuck = should_count_as_stuck(last_failure_sig, failure_sig, changed_files)
+            stuck = should_count_as_stuck(last_failure_sig, failure_sig, changed_text)
         except TypeError:
             # Backwards compatibility if function takes only 2 args
             stuck = should_count_as_stuck(last_failure_sig, failure_sig)
