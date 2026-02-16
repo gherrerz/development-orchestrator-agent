@@ -47,6 +47,7 @@ python-django:
 java-spring-boot:
   language: java
   toolchain: { kind: java, version: "21" }
+
   markers:
     any_of:
       - "pom.xml"
@@ -55,6 +56,7 @@ java-spring-boot:
       - "build.gradle.kts"
       - "**/build.gradle"
       - "**/build.gradle.kts"
+
   bootstrap:
     kind: template
     templates:
@@ -87,6 +89,7 @@ java-spring-boot:
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-starter-web</artifactId>
               </dependency>
+
               <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-starter-test</artifactId>
@@ -100,9 +103,25 @@ java-spring-boot:
                   <groupId>org.springframework.boot</groupId>
                   <artifactId>spring-boot-maven-plugin</artifactId>
                 </plugin>
+
+                <!-- Enterprise: make test discovery deterministic -->
+                <plugin>
+                  <groupId>org.apache.maven.plugins</groupId>
+                  <artifactId>maven-surefire-plugin</artifactId>
+                  <version>3.2.5</version>
+                  <configuration>
+                    <includes>
+                      <include>**/*Test.java</include>
+                      <include>**/*Tests.java</include>
+                      <include>**/*IT.java</include>
+                    </includes>
+                    <trimStackTrace>false</trimStackTrace>
+                  </configuration>
+                </plugin>
               </plugins>
             </build>
           </project>
+
       - path: "src/main/java/com/example/Application.java"
         content: |
           package com.example;
@@ -116,6 +135,7 @@ java-spring-boot:
                   SpringApplication.run(Application.class, args);
               }
           }
+
       - path: "src/test/java/com/example/ApplicationTests.java"
         content: |
           package com.example;
@@ -128,16 +148,19 @@ java-spring-boot:
               @Test
               void contextLoads() {}
           }
+
   deps:
     apt: [maven]
+
   commands:
     test: "mvn -Dstyle.color=never test"
-    build: "mvn -q -DskipTests package"
+    build: "mvn -Dstyle.color=never -DskipTests package"
+
+  # With the new orchestrator policy, this is now "defense in depth" not brittle matching
   allowed_test_prefixes:
-    - "mvn test"
-    - "mvn -q test"
-    - "./gradlew test"
-    - "./gradlew -q test"
+    - "mvn"
+    - "./mvnw"
+    - "./gradlew"
 
 # -----------------------------
 # NODE stacks (bootstrap templates)

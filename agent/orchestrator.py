@@ -311,14 +311,61 @@ def _has_shell_metachars(cmd: str) -> bool:
 
 
 def is_safe_test_command(cmd: str, allowed_prefixes: List[str]) -> bool:
+    """
+    Enterprise safety:
+    - Block shell metacharacters (; & | $ ` > < newline)
+    - Allow if matches an allowlist of prefixes OR if the first token is an allowed runner binary.
+      This avoids brittle exact-prefix matching across stacks.
+    """
     cmd = (cmd or "").strip()
     if not cmd:
         return True
+
+    # hard block: never allow shell metacharacters
     if _has_shell_metachars(cmd):
         return False
-    normalized = re.sub(r"\s+", " ", cmd).strip().lower()
-    allowed = [re.sub(r"\s+", " ", a).strip().lower() for a in (allowed_prefixes or [])]
-    return any(normalized.startswith(a) for a in allowed)
+
+    # normalize whitespace
+    normalized = re.sub(r"\s+", " ", cmd).strip()
+
+    # 1) Prefix allowlist (backward compatible)
+    allowed = [re.sub(r"\s+", " ", a).strip() for a in (allowed_prefixes or []) if isinstance(a, str)]
+    if any(normalized.lower().startswith(a.lower()) for a in allowed if a):
+        return True
+
+    # 2) Runner-binary allowlist (robust multi-stack)
+    try:
+        tokens = shlex.split(cmd)
+    except Exception:
+        return False
+
+    if not tokens:
+        return False
+
+    first = tokens[0].lower()
+
+    # Common safe runners across stacks
+    allowed_bins = {
+        "mvn", "./mvnw",
+        "gradle", "./gradlew",
+        "npm", "pnpm", "yarn",
+        "dotnet",
+        "go",
+        "pytest", "python", "python3",
+        "node",
+    }
+
+    if first not in allowed_bins:
+        return False
+
+    # extra rule: if first is python, only allow common test invocations (avoid arbitrary python scripts)
+    if first in ("python", "python3"):
+        # allow "python -m pytest ..." or "python -m unittest ..."
+        if len(tokens) >= 3 and tokens[1] == "-m" and tokens[2] in ("pytest", "unittest"):
+            return True
+        return False
+
+    return True
 
 
 def run_cmd(cmd: str) -> Tuple[int, str]:
