@@ -23,9 +23,11 @@ CONTRATO TÍPICO DE REPARACIÓN
   - description (string)
   - y NINGÚN campo adicional si additionalProperties=false.
 - Si una task tiene campos extra (p.ej. files_to_touch, files, etc.), conviértelos a texto y agrégalos dentro de description.
-- Si falta id/title:
-  - id: genera "T1", "T2", "T3"… (secuencial)
-  - title: deriva desde la primera frase de description
+- Si falta id:
+  - Genera ids que cumplan el schema (minLength>=3).
+  - Usa formato "T01", "T02", "T03"… (2 dígitos, cero a la izquierda).
+- NUNCA uses ids como "T1" o "T2" si el schema requiere minLength >= 3.
+
 
 INPUT QUE RECIBES
 - schema_json: el schema completo (plan.schema.json)

@@ -17,7 +17,7 @@ REGLAS DE CONSISTENCIA (ENTERPRISE):
    - files_to_touch (raíz) debe ser la UNIÓN (sin duplicados) de todos los tasks[].files + archivos nuevos.
 4) NO inventes frameworks distintos al stack solicitado. Cambios mínimos viables.
 5) NUNCA pongas "files_to_touch" dentro de una task (eso es campo raíz).
-6) IDs: usa formato "T1", "T2", "T3" (secuencial). No los omitas.
+6) IDs: usa formato "T01", "T02", "T03" (secuencial). No los omitas.
 
 VALIDACIÓN MENTAL ANTES DE RESPONDER:
 - ¿tasks tiene al menos 1 item?
@@ -37,14 +37,14 @@ PLANTILLA EXACTA (CÓPIALA Y RELLENA):
   ],
   "tasks": [
     {
-      "id": "T1",
+      "id": "T01",
       "title": "Implementar ...",
       "description": "Detalles concretos de lo que se hará, a nivel técnico.",
       "type": "impl",
       "files": ["path/relativo/archivo1", "path/relativo/archivo2"]
     },
     {
-      "id": "T2",
+      "id": "T02",
       "title": "Agregar pruebas ...",
       "description": "Qué pruebas, en qué capa, criterios de aceptación cubiertos.",
       "type": "test",

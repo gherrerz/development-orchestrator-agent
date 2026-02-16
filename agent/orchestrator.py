@@ -94,7 +94,9 @@ def _coerce_test_strategy(v: Any) -> str:
 def _mk_task_id(i: int, title: str, desc: str) -> str:
     base = f"{i}:{title}:{desc}"
     h = hashlib.sha1(base.encode("utf-8", errors="ignore")).hexdigest()[:8]
-    return f"T{i}-{h}"
+    # T01-xxxxxxxx  (minLength garantizado)
+    return f"T{i:02d}-{h}"
+
 
 
 def _repair_tasks(tasks_val: Any) -> List[Dict[str, str]]:
@@ -143,7 +145,11 @@ def _repair_tasks(tasks_val: Any) -> List[Dict[str, str]]:
         if not desc:
             desc = title
 
-        if not tid:
+        if not tid or len(tid) < 3:
+            tid = _mk_task_id(idx, title, desc)
+
+        # Si el LLM trae un id corto (p.ej. "T2"), fuerza uno válido por schema
+        if len(tid) < 3:
             tid = _mk_task_id(idx, title, desc)
 
         repaired.append({"id": tid, "title": title, "description": desc})
