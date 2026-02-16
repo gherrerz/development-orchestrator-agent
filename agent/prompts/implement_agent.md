@@ -45,6 +45,12 @@ REGLAS CRÍTICAS
 
 7) No agregues dependencias innecesarias.
 
+8) REGLA ENTERPRISE DE TAMAÑO (EVITAR TRUNCACIÓN):
+    - Devuelve como máximo 3 archivos en "files{}" por iteración.
+    - NO reescribas archivos grandes si no es necesario.
+    - Si un archivo es grande y el cambio es pequeño, usa "patches[]" SOLO si es trivial (1-2 líneas).
+    - Nunca incluyas "patches": [].
+
 ────────────────────────────────────────
 INPUTS
 ────────────────────────────────────────

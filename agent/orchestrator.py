@@ -614,6 +614,13 @@ def main() -> None:
             schema_name="patch.schema.json",
         )
 
+        # --- DEBUG ENTERPRISE: guardar patch crudo del LLM ---
+        write_out(
+            f"agent/out/iter_{i}_patch_from_llm.json",
+            json.dumps(patch_obj, ensure_ascii=False, indent=2),
+        )
+        
+        # Normalización robusta
         patch_obj = normalize_patch(patch_obj)
 
         # HARD GUARD: nunca permitas patches vacíos
