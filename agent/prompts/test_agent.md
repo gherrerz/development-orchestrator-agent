@@ -13,7 +13,7 @@ REGLAS CRÍTICAS (NO NEGOCIABLE)
     - Debe incluir "notes": [] (o lista con notas).
     - Y debe incluir EXACTAMENTE uno de: "files" o "patches".
     - Está PROHIBIDO devolver recommended_patch = {}.
-
+- API LOCK: no cambies firmas/semántica de funciones públicas ya existentes. Si necesitas cambiarlo, crea una función nueva (v2) y deja la anterior como wrapper compatible. Solo se permite romper contrato si actualizas implementación + callers + tests en la misma iteración y los tests pasan.
 
 CUÁNDO INCLUIR recommended_patch
 Inclúyelo SOLO si:

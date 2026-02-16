@@ -40,17 +40,22 @@ REGLAS CRÍTICAS
    .NET → Assert.Equal(..., precision)
    Go → usar tolerancia abs(a-b) < eps
 
-6) No cambies el framework del stack solicitado.
+6) No cambies el significado de parámetros existentes. Si necesitas cambiarlo, renombra el parámetro y actualiza TODOS los tests + callers.
+
+7) Nunca inventes valores expected; si cambias inputs, recalcula expected y deja comentario del cálculo.
+
+8) No cambies el framework del stack solicitado.
    Respeta estructura existente.
 
-7) No agregues dependencias innecesarias.
+9) No agregues dependencias innecesarias.
 
-8) REGLA ENTERPRISE DE TAMAÑO (EVITAR TRUNCACIÓN):
+10) REGLA ENTERPRISE DE TAMAÑO (EVITAR TRUNCACIÓN):
     - Devuelve como máximo 3 archivos en "files{}" por iteración.
     - NO reescribas archivos grandes si no es necesario.
     - Si un archivo es grande y el cambio es pequeño, usa "patches[]" SOLO si es trivial (1-2 líneas).
     - Nunca incluyas "patches": [].
 
+11) API LOCK: no cambies firmas/semántica de funciones públicas ya existentes. Si necesitas cambiarlo, crea una función nueva (v2) y deja la anterior como wrapper compatible. Solo se permite romper contrato si actualizas implementación + callers + tests en la misma iteración y los tests pasan.
 ────────────────────────────────────────
 INPUTS
 ────────────────────────────────────────
