@@ -778,10 +778,20 @@ def main() -> None:
 
         # Optional: stuck detection (kept, but not aborting hard here)
         failure_sig = stable_failure_signature(test_exit, test_out)
-        if should_count_as_stuck(last_failure_sig, failure_sig):
+
+        # should_count_as_stuck signature hardening:
+        # Newer versions expect (last_sig, current_sig, changed_files)
+        try:
+            stuck = should_count_as_stuck(last_failure_sig, failure_sig, changed_files)
+        except TypeError:
+            # Backwards compatibility if function takes only 2 args
+            stuck = should_count_as_stuck(last_failure_sig, failure_sig)
+
+        if stuck:
             stuck_count += 1
         else:
             stuck_count = 0
+
         last_failure_sig = failure_sig
 
     summary_md = render_summary_md(issue_title, pr_url, iteration_notes, test_report)
