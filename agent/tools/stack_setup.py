@@ -1,8 +1,9 @@
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List
 
 from agent.stacks.registry import load_catalog, resolve_stack_spec
 
@@ -17,10 +18,130 @@ def run(cmd: List[str], check: bool = True) -> subprocess.CompletedProcess:
 
 
 def exists_any(patterns: List[str]) -> bool:
+    """True if any glob pattern matches at least one file."""
     for pat in patterns:
         if list(Path(".").glob(pat)):
             return True
     return False
+
+
+def ensure_parent_dir(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def write_file_if_missing(rel_path: str, content: str) -> bool:
+    p = Path(rel_path)
+    if p.exists():
+        return False
+    ensure_parent_dir(p)
+    p.write_text(content, encoding="utf-8")
+    return True
+
+
+def load_stack_entry(catalog: Dict[str, Any], stack_id: str) -> Dict[str, Any]:
+    entry = catalog.get(stack_id) or {}
+    return entry if isinstance(entry, dict) else {}
+
+
+def write_preflight_report(report: Dict[str, Any]) -> None:
+    out_dir = Path("agent/out")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "preflight.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def preflight_bootstrap(spec, catalog_entry: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Preflight: ensure minimal build/config markers exist for the selected stack.
+    If missing and bootstrap.kind is defined, scaffold minimal files/commands.
+
+    Always writes agent/out/preflight.json for observability.
+    """
+    markers = catalog_entry.get("markers") if isinstance(catalog_entry.get("markers"), dict) else {}
+    any_of = markers.get("any_of") or []
+    if not isinstance(any_of, list):
+        any_of = []
+
+    bootstrap = catalog_entry.get("bootstrap") if isinstance(catalog_entry.get("bootstrap"), dict) else {}
+    b_kind = str((bootstrap or {}).get("kind") or "none").strip().lower()
+
+    report: Dict[str, Any] = {
+        "stack_id": getattr(spec, "stack_id", ""),
+        "language": getattr(spec, "language", ""),
+        "markers_any_of": any_of,
+        "markers_found": bool(any_of and exists_any(any_of)),
+        "bootstrap_kind": b_kind,
+        "bootstrap_applied": False,
+        "created_files": [],
+        "commands_run": [],
+        "notes": [],
+    }
+
+    # No markers defined => skip (unknown stack), but still write report
+    if not any_of:
+        report["notes"].append("No markers.any_of defined for this stack; skipping bootstrap.")
+        write_preflight_report(report)
+        return report
+
+    # Markers present => skip, but still write report
+    if report["markers_found"]:
+        report["notes"].append("Markers present; skipping bootstrap.")
+        write_preflight_report(report)
+        return report
+
+    # Markers missing => attempt bootstrap
+    report["notes"].append("Markers missing; attempting bootstrap.")
+    created: List[str] = []
+
+    if b_kind == "template":
+        templates = bootstrap.get("templates") or []
+        if not isinstance(templates, list):
+            templates = []
+        for t in templates:
+            if not isinstance(t, dict):
+                continue
+            path = str(t.get("path") or "").strip()
+            content = t.get("content")
+            if not path or not isinstance(content, str):
+                continue
+            if write_file_if_missing(path, content):
+                created.append(path)
+
+        report["bootstrap_applied"] = True
+        report["created_files"] = created
+        report["notes"].append(f"Template bootstrap created_files={len(created)}")
+
+    elif b_kind == "command":
+        cmds = bootstrap.get("commands") or []
+        if not isinstance(cmds, list):
+            cmds = []
+        for c in cmds:
+            if not isinstance(c, str) or not c.strip():
+                continue
+            p = subprocess.run(c, shell=True, text=True, capture_output=True)
+            report["commands_run"].append(
+                {
+                    "cmd": c,
+                    "rc": p.returncode,
+                    "stdout": (p.stdout or "")[-2000:],
+                    "stderr": (p.stderr or "")[-2000:],
+                }
+            )
+        report["bootstrap_applied"] = True
+        report["notes"].append("Command bootstrap executed (best-effort).")
+
+    else:
+        report["notes"].append("bootstrap.kind is none/unknown; cannot scaffold automatically.")
+
+    # Re-check markers after bootstrap
+    report["markers_found_after"] = bool(exists_any(any_of))
+    if not report["markers_found_after"]:
+        report["notes"].append("Markers still missing after bootstrap.")
+
+    write_preflight_report(report)
+    return report
 
 
 def install_repo_declared_deps(language: str, package_manager: str) -> None:
@@ -70,7 +191,7 @@ def install_repo_declared_deps(language: str, package_manager: str) -> None:
             run(["./gradlew", "-q", "assemble"], check=False)
 
     # .NET
-    if language in ("dotnet", "csharp") or exists_any(["*.sln", "*.csproj"]):
+    if language in ("dotnet", "csharp") or exists_any(["*.sln", "*.csproj", "**/*.sln", "**/*.csproj"]):
         run(["dotnet", "restore"], check=False)
 
     # Go
@@ -117,16 +238,22 @@ def install_safety_nets(spec) -> None:
 
 
 def main() -> None:
-    # The request can come from env or be inferred from repo
+    # The request can come from env
     req = {
         "stack": (os.environ.get("STACK") or "").strip(),
         "language": (os.environ.get("LANGUAGE") or "").strip(),
         "test_command": (os.environ.get("TEST_COMMAND") or "").strip(),
     }
+
     catalog = load_catalog()
     spec = resolve_stack_spec(req, repo_root=".", catalog=catalog)
 
+    # Upgrade pip early
     run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=False)
+
+    # Preflight bootstrap (data-driven)
+    entry = load_stack_entry(catalog, spec.stack_id)
+    preflight_bootstrap(spec, entry)
 
     pm = str(spec.meta.get("package_manager") or "")
 

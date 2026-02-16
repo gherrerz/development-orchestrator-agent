@@ -26,6 +26,35 @@ class DependencySpec:
 
 
 @dataclass
+class MarkerSpec:
+    """
+    Build/config markers used to detect if a repo is initialized for a stack.
+    any_of: if none of these patterns exist, bootstrap may run.
+    """
+    any_of: List[str] = field(default_factory=list)
+
+
+@dataclass
+class BootstrapTemplate:
+    path: str
+    content: str
+
+
+@dataclass
+class BootstrapSpec:
+    """
+    Bootstrap strategy to scaffold minimal build files if missing markers.
+    kind:
+      - "none": do nothing
+      - "template": write templates if missing
+      - "command": run idempotent commands (best-effort)
+    """
+    kind: str = "none"  # none|template|command
+    templates: List[BootstrapTemplate] = field(default_factory=list)
+    commands: List[str] = field(default_factory=list)
+
+
+@dataclass
 class StackSpec:
     """Resolved spec used across extract_request, stack_setup and orchestrator.
 
@@ -38,6 +67,10 @@ class StackSpec:
     toolchain: ToolchainSpec = field(default_factory=ToolchainSpec)
     commands: CommandSpec = field(default_factory=CommandSpec)
     deps: DependencySpec = field(default_factory=DependencySpec)
+
+    # Preflight bootstrap
+    markers: MarkerSpec = field(default_factory=MarkerSpec)
+    bootstrap: BootstrapSpec = field(default_factory=BootstrapSpec)
 
     # Security: allowlist for test command prefixes (no shell features).
     allowed_test_prefixes: List[str] = field(default_factory=list)

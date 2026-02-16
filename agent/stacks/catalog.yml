@@ -6,10 +6,17 @@
 #   deps: { apt:[], pip:[], npm:[] }
 #   commands: { test:"...", build:"...", lint:"..." }
 #   allowed_test_prefixes: ["..."]  # security allowlist prefixes for test_command
+#   markers: { any_of: ["glob", ...] }  # if none exist => repo not initialized for this stack
+#   bootstrap:
+#     kind: none|template|command
+#     templates: [{path:"...", content:"..."}]
+#     commands: ["..."]
 
 python-fastapi-postgres:
   language: python
   toolchain: { kind: python, version: "3.11" }
+  markers:
+    any_of: ["pyproject.toml", "requirements.txt"]
   deps:
     pip:
       - fastapi
@@ -19,13 +26,13 @@ python-fastapi-postgres:
       - pytest
   commands:
     test: "pytest -q"
-  allowed_test_prefixes:
-    - "pytest"
-    - "python -m pytest"
+  allowed_test_prefixes: ["pytest", "python -m pytest"]
 
 python-django:
   language: python
   toolchain: { kind: python, version: "3.11" }
+  markers:
+    any_of: ["manage.py", "pyproject.toml", "requirements.txt"]
   deps:
     pip:
       - django
@@ -35,16 +42,94 @@ python-django:
       - pytest-django
   commands:
     test: "pytest -q"
-  allowed_test_prefixes:
-    - "pytest"
-    - "python -m pytest"
+  allowed_test_prefixes: ["pytest", "python -m pytest"]
 
 java-spring-boot:
   language: java
   toolchain: { kind: java, version: "21" }
+  markers:
+    any_of:
+      - "pom.xml"
+      - "**/pom.xml"
+      - "build.gradle"
+      - "build.gradle.kts"
+      - "**/build.gradle"
+      - "**/build.gradle.kts"
+  bootstrap:
+    kind: template
+    templates:
+      - path: "pom.xml"
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <project xmlns="http://maven.apache.org/POM/4.0.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+            <modelVersion>4.0.0</modelVersion>
+
+            <parent>
+              <groupId>org.springframework.boot</groupId>
+              <artifactId>spring-boot-starter-parent</artifactId>
+              <version>3.3.0</version>
+              <relativePath/>
+            </parent>
+
+            <groupId>com.example</groupId>
+            <artifactId>app</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+            <name>app</name>
+
+            <properties>
+              <java.version>21</java.version>
+            </properties>
+
+            <dependencies>
+              <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter-web</artifactId>
+              </dependency>
+              <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter-test</artifactId>
+                <scope>test</scope>
+              </dependency>
+            </dependencies>
+
+            <build>
+              <plugins>
+                <plugin>
+                  <groupId>org.springframework.boot</groupId>
+                  <artifactId>spring-boot-maven-plugin</artifactId>
+                </plugin>
+              </plugins>
+            </build>
+          </project>
+      - path: "src/main/java/com/example/Application.java"
+        content: |
+          package com.example;
+
+          import org.springframework.boot.SpringApplication;
+          import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+          @SpringBootApplication
+          public class Application {
+              public static void main(String[] args) {
+                  SpringApplication.run(Application.class, args);
+              }
+          }
+      - path: "src/test/java/com/example/ApplicationTests.java"
+        content: |
+          package com.example;
+
+          import org.junit.jupiter.api.Test;
+          import org.springframework.boot.test.context.SpringBootTest;
+
+          @SpringBootTest
+          class ApplicationTests {
+              @Test
+              void contextLoads() {}
+          }
   deps:
-    apt:
-      - maven
+    apt: [maven]
   commands:
     test: "mvn -q test"
     build: "mvn -q -DskipTests package"
@@ -54,12 +139,47 @@ java-spring-boot:
     - "./gradlew test"
     - "./gradlew -q test"
 
+# -----------------------------
+# NODE stacks (bootstrap templates)
+# -----------------------------
 node-express:
   language: javascript
   toolchain: { kind: node, version: "20" }
+  markers:
+    any_of: ["package.json", "**/package.json"]
+  bootstrap:
+    kind: template
+    templates:
+      - path: "package.json"
+        content: |
+          {
+            "name": "app",
+            "version": "0.1.0",
+            "private": true,
+            "type": "commonjs",
+            "scripts": {
+              "test": "node -e \"console.log('ok: no tests yet')\"",
+              "start": "node src/index.js"
+            },
+            "dependencies": {},
+            "devDependencies": {}
+          }
+      - path: "src/index.js"
+        content: |
+          const http = require("http");
+          const server = http.createServer((req, res) => {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/plain");
+            res.end("OK\n");
+          });
+          server.listen(process.env.PORT || 3000, () => console.log("listening"));
+      - path: ".gitignore"
+        content: |
+          node_modules
+          dist
+          .env
   deps:
-    npm:
-      - express
+    npm: [express]
   commands:
     test: "npm test"
   allowed_test_prefixes:
@@ -72,10 +192,31 @@ node-express:
 node-react:
   language: javascript
   toolchain: { kind: node, version: "20" }
+  markers:
+    any_of: ["package.json", "**/package.json"]
+  bootstrap:
+    kind: template
+    templates:
+      - path: "package.json"
+        content: |
+          {
+            "name": "app",
+            "version": "0.1.0",
+            "private": true,
+            "type": "module",
+            "scripts": {
+              "test": "node -e \"console.log('ok: no tests yet')\""
+            },
+            "dependencies": {},
+            "devDependencies": {}
+          }
+      - path: ".gitignore"
+        content: |
+          node_modules
+          dist
+          .env
   deps:
-    npm:
-      - react
-      - react-dom
+    npm: [react, react-dom]
   commands:
     test: "npm test"
   allowed_test_prefixes:
@@ -88,10 +229,31 @@ node-react:
 node-angular:
   language: typescript
   toolchain: { kind: node, version: "20" }
+  markers:
+    any_of: ["package.json", "**/package.json"]
+  bootstrap:
+    kind: template
+    templates:
+      - path: "package.json"
+        content: |
+          {
+            "name": "app",
+            "version": "0.1.0",
+            "private": true,
+            "type": "module",
+            "scripts": {
+              "test": "node -e \"console.log('ok: no tests yet')\""
+            },
+            "dependencies": {},
+            "devDependencies": {}
+          }
+      - path: ".gitignore"
+        content: |
+          node_modules
+          dist
+          .env
   deps:
-    npm:
-      - "@angular/core"
-      - "@angular/cli"
+    npm: ["@angular/core", "@angular/cli"]
   commands:
     test: "npm test"
   allowed_test_prefixes:
@@ -101,18 +263,62 @@ node-angular:
     - "pnpm run test"
     - "yarn test"
 
+# -----------------------------
+# .NET (bootstrap commands)
+# -----------------------------
 dotnet-webapi:
   language: dotnet
   toolchain: { kind: dotnet, version: "8.0.x" }
+  markers:
+    any_of:
+      - "*.sln"
+      - "**/*.sln"
+      - "*.csproj"
+      - "**/*.csproj"
+  bootstrap:
+    kind: command
+    commands:
+      - |
+        if ! ls *.sln >/dev/null 2>&1 && ! ls **/*.sln >/dev/null 2>&1 && ! ls *.csproj >/dev/null 2>&1 && ! ls **/*.csproj >/dev/null 2>&1; then
+          dotnet new sln -n app
+          dotnet new webapi -n app
+          dotnet sln app.sln add app/app.csproj
+        fi
   deps: {}
   commands:
     test: "dotnet test"
-  allowed_test_prefixes:
-    - "dotnet test"
+  allowed_test_prefixes: ["dotnet test"]
 
+# -----------------------------
+# Go (bootstrap commands + main.go template)
+# -----------------------------
 go-fiber:
   language: go
   toolchain: { kind: go, version: "1.22.x" }
+  markers:
+    any_of: ["go.mod", "**/go.mod"]
+  bootstrap:
+    kind: command
+    commands:
+      - |
+        if [ ! -f go.mod ]; then
+          go mod init example.com/app
+          go get github.com/gofiber/fiber/v2@latest
+        fi
+      - |
+        if [ ! -f main.go ]; then
+          cat > main.go <<'EOF'
+          package main
+
+          import "github.com/gofiber/fiber/v2"
+
+          func main() {
+              app := fiber.New()
+              app.Get("/", func(c *fiber.Ctx) error { return c.SendString("OK") })
+              _ = app.Listen(":3000")
+          }
+          EOF
+        fi
   deps: {}
   commands:
     test: "go test ./..."
