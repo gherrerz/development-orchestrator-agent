@@ -201,33 +201,35 @@ def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
 def normalize_patch(p: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normaliza el patch para cumplir patch.schema.json de manera robusta:
-    - Si viene envuelto como {"patch": {...}}, lo desempaqueta.
-    - Mantiene 'notes' siempre presente.
-    - 'patches' solo se incluye si tiene al menos 1 item válido.
-    - 'files' solo se incluye si tiene al menos 1 entrada válida.
-    - Evita 'patches': [] porque rompe schema (minItems: 1) cuando está presente.
+    - Desempaqueta {"patch": {...}} si viene así.
+    - 'notes' siempre lista de strings.
+    - Incluye 'files' si tiene al menos 1 archivo válido.
+    - Incluye 'patches' SOLO si tiene >=1 item válido.
+    - Elimina explícitamente 'patches' si viene vacío (parche anti-bombas).
     """
     if isinstance(p, dict) and "patch" in p and isinstance(p["patch"], dict):
         p = p["patch"]
 
     out: Dict[str, Any] = {}
-    out["notes"] = p.get("notes") if isinstance(p.get("notes"), list) else []
 
-    # ---- files ----
-    files = p.get("files")
+    # notes
+    notes = p.get("notes", [])
+    if not isinstance(notes, list):
+        notes = []
+    out["notes"] = [str(x) for x in notes if isinstance(x, (str, int, float, bool))]
+
+    # files
     cleaned_files: Dict[str, Any] = {}
-
+    files = p.get("files")
     if isinstance(files, dict):
         for path, val in files.items():
             if not isinstance(path, str) or not path.strip():
                 continue
 
-            # allow string content shorthand
             if isinstance(val, str):
                 cleaned_files[path] = val
                 continue
 
-            # allow object form with {operation, content}
             if isinstance(val, dict):
                 content = val.get("content")
                 if not isinstance(content, str):
@@ -240,8 +242,8 @@ def normalize_patch(p: Dict[str, Any]) -> Dict[str, Any]:
     if cleaned_files:
         out["files"] = cleaned_files
 
-    # ---- patches ----
-    patches_in = p.get("patches") or []
+    # patches (solo si hay >=1 válido)
+    patches_in = p.get("patches")
     cleaned_patches: List[Dict[str, str]] = []
     if isinstance(patches_in, list):
         for item in patches_in:
@@ -252,11 +254,9 @@ def normalize_patch(p: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(path, str) and path.strip() and isinstance(diff, str) and len(diff) >= 10:
                 cleaned_patches.append({"path": path, "diff": diff})
 
-    # Solo incluir patches si hay >=1 (evita patches: [])
     if cleaned_patches:
         out["patches"] = cleaned_patches
 
-    # Nota: no agregamos keys extra para no violar additionalProperties:false
     return out
 
 
@@ -582,7 +582,13 @@ def main() -> None:
         )
 
         patch_obj = normalize_patch(patch_obj)
+
+        # HARD GUARD: nunca permitas patches vacíos
+        if "patches" in patch_obj and (not isinstance(patch_obj["patches"], list) or len(patch_obj["patches"]) == 0):
+            patch_obj.pop("patches", None)
+
         safe_validate(patch_obj, PATCH_SCHEMA, "patch.schema.json")
+
 
         apply_patch_object(patch_obj)
 

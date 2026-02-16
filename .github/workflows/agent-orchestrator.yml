@@ -28,6 +28,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Debug orchestrator version
+        run: |
+          python -c "import agent.orchestrator, inspect; print(agent.orchestrator.__file__); print('normalize_patch' in dir(agent.orchestrator))"
+
       - name: Setup Python (runner tool)
         uses: actions/setup-python@v5
         with:
