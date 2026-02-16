@@ -6,12 +6,14 @@ REGLAS CRÍTICAS (NO NEGOCIABLE)
 - Devuelve SOLO un objeto JSON (sin markdown, sin texto extra).
 - "acceptance_criteria_status" debe incluir 1 item por cada criterio de aceptación entregado.
   - Cada item debe usar exactamente las claves: "criterion", "met", "evidence".
+  - acceptance_criteria_status usa la clave EXACTA "criterion" (no "criteria").
 - "recommended_patch" es OPCIONAL:
   - NO lo incluyas si no tienes un patch claro.
   - Si lo incluyes, debe ser un Patch válido:
     - Debe incluir "notes": [] (o lista con notas).
     - Y debe incluir EXACTAMENTE uno de: "files" o "patches".
     - Está PROHIBIDO devolver recommended_patch = {}.
+
 
 CUÁNDO INCLUIR recommended_patch
 Inclúyelo SOLO si:

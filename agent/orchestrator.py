@@ -268,41 +268,80 @@ def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[s
     passed = bool(tr.get("passed", False))
     summary = str(tr.get("summary") or "")[:4000]
 
-    ac = run_req.get("acceptance_criteria", []) or []
-    ac_list = [{"criteria": c, "met": passed, "evidence": summary[:400]} for c in ac]
+    # failure_hints: siempre lista[str]
+    fh = tr.get("failure_hints", [])
+    if not isinstance(fh, list):
+        fh = []
+    fh = [str(x) for x in fh if isinstance(x, (str, int, float, bool))][:50]
+
+    # acceptance_criteria_status: preferir lo que venga del agente si es válido,
+    # pero normalizar claves y tipos para cumplir schema (criterion/met/evidence)
+    normalized_ac: List[Dict[str, Any]] = []
+    ac_items = tr.get("acceptance_criteria_status")
+
+    if isinstance(ac_items, list) and ac_items:
+        for item in ac_items:
+            if not isinstance(item, dict):
+                continue
+
+            # Compat: algunos modelos devuelven "criteria" en vez de "criterion"
+            crit = item.get("criterion", None)
+            if crit is None:
+                crit = item.get("criteria", None)
+
+            if crit is None:
+                continue
+
+            met = item.get("met", False)
+            if isinstance(met, str):
+                met = met.strip().lower() in ("true", "1", "yes", "y", "si", "sí")
+            else:
+                met = bool(met)
+
+            evidence = str(item.get("evidence") or "")[:1200]
+
+            normalized_ac.append(
+                {"criterion": str(crit), "met": met, "evidence": evidence}
+            )
+
+    # Si no vino lista válida, derivarla desde el run_request (siempre schema-compliant)
+    if not normalized_ac:
+        ac = run_req.get("acceptance_criteria", []) or []
+        normalized_ac = [{"criterion": str(c), "met": passed, "evidence": summary[:400]} for c in ac]
 
     out: Dict[str, Any] = {
         "passed": passed,
         "summary": summary,
-        "failure_hints": tr.get("failure_hints", []) if isinstance(tr.get("failure_hints", []), list) else [],
-        "acceptance_criteria_status": ac_list,
+        "failure_hints": fh,
+        "acceptance_criteria_status": normalized_ac,
     }
 
     # -------------------------------
     # ENTERPRISE HARDENING:
     # recommended_patch es opcional y NUNCA debe romper el schema.
-    # Si viene vacío, inválido o sin notes, lo descartamos.
+    # Si viene vacío, inválido o sin files/patches, lo descartamos.
     # -------------------------------
     rp = tr.get("recommended_patch", None)
     if isinstance(rp, dict):
-        # Normaliza usando normalize_patch (la misma que usas para implementación)
         rp_norm = normalize_patch(rp)
 
         # Hard guard: no permitir patches vacíos
         if "patches" in rp_norm and (not isinstance(rp_norm["patches"], list) or len(rp_norm["patches"]) == 0):
             rp_norm.pop("patches", None)
 
-        # Si no tiene files ni patches, descartar
+        # Asegura notes (schema requiere notes si recommended_patch existe)
+        notes = rp_norm.get("notes", [])
+        if not isinstance(notes, list):
+            notes = []
+        rp_norm["notes"] = [str(x) for x in notes if isinstance(x, (str, int, float, bool))][:50]
+
         has_files = isinstance(rp_norm.get("files"), dict) and len(rp_norm.get("files")) > 0
         has_patches = isinstance(rp_norm.get("patches"), list) and len(rp_norm.get("patches")) > 0
 
-        # Asegura notes
-        if "notes" not in rp_norm:
-            rp_norm["notes"] = []
-
+        # Solo incluir si cumple oneOf (files o patches) y tiene notes
         if has_files or has_patches:
             out["recommended_patch"] = rp_norm
-        # else: descartar silenciosamente (no romper orquestador)
+        # else: descartar silenciosamente
 
     return out
 
