@@ -300,6 +300,39 @@ def is_safe_test_command(cmd: str, allowed_prefixes: List[str]) -> bool:
     return any(normalized.startswith(a) for a in allowed)
 
 
+def detect_repo_changes() -> List[str]:
+    """
+    Detecta cambios en el working tree incluyendo archivos untracked.
+    Devuelve una lista estable (ordenada) de paths.
+    """
+    changed: set[str] = set()
+
+    # Cambios en archivos tracked
+    code, out = run_cmd("git diff --name-only")
+    if code == 0:
+        for line in (out or "").splitlines():
+            line = line.strip()
+            if line:
+                changed.add(line)
+
+    # Untracked + staged + modified (porcelain)
+    code, st = run_cmd("git status --porcelain")
+    if code == 0:
+        for line in (st or "").splitlines():
+            # Formatos típicos:
+            # " M file", "M  file", "?? file", "A  file"
+            if not line.strip():
+                continue
+            path = line[3:].strip() if len(line) >= 4 else ""
+            if path:
+                # Soporta rename "old -> new"
+                if " -> " in path:
+                    path = path.split(" -> ", 1)[1].strip()
+                changed.add(path)
+
+    return sorted(changed)
+
+
 def run_cmd(cmd: str) -> Tuple[int, str]:
     args = shlex.split(cmd)
     p = subprocess.run(args, text=True, capture_output=True)
@@ -592,11 +625,19 @@ def main() -> None:
 
         apply_patch_object(patch_obj)
 
-        _, changed = run_cmd("git diff --name-only")
-        changed = changed.strip()
-        write_out(f"agent/out/iter_{i}_changed_files.txt", changed)
+        # --- Enterprise debug: guarda el patch de la iteración ---
+        write_out(f"agent/out/iter_{i}_patch.json", json.dumps(patch_obj, ensure_ascii=False, indent=2))
 
-        if not changed:
+        # Detect changes (tracked + untracked)
+        changed_files = detect_repo_changes()
+
+        # Debug: guarda status completo
+        _, status_porcelain = run_cmd("git status --porcelain")
+        write_out(f"agent/out/iter_{i}_git_status.txt", status_porcelain)
+
+        write_out(f"agent/out/iter_{i}_changed_files.txt", "\n".join(changed_files))
+
+        if not changed_files:
             iteration_notes.append(f"Iteración {i}: sin cambios detectados (skip)")
             continue
 
