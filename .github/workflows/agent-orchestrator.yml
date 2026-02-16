@@ -31,12 +31,8 @@ jobs:
       - name: Debug orchestrator version (no import)
         run: |
           set -euo pipefail
-          echo "PYTHONPATH=$PYTHONPATH"
-          python -c "import os; print(os.path.abspath('agent/orchestrator.py'))"
-          python -c "import pathlib; p=pathlib.Path('agent/orchestrator.py'); print('exists=', p.exists()); print('size=', p.stat().st_size)"
-          echo "---- first 60 lines ----"
-          sed -n '1,60p' agent/orchestrator.py
-          echo "---- grep normalize_patch ----"
+          python -c "import os; print('orchestrator=', os.path.abspath('agent/orchestrator.py'))"
+          sed -n '1,80p' agent/orchestrator.py
           grep -n "def normalize_patch" -n agent/orchestrator.py || true
 
       - name: Setup Python (runner tool)
