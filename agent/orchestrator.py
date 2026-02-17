@@ -11,7 +11,14 @@ import time
 from agent.stacks.registry import resolve_stack_spec, load_catalog
 from jsonschema import validate
 
-from agent.tools.github_tools import get_issue, create_branch, git_commit_all, gh_pr_create
+from agent.tools.github_tools import (
+    get_issue,
+    ensure_branch,
+    git_commit_all,
+    git_push,
+    git_commits_ahead,
+    gh_pr_ensure,
+)
 from agent.tools.llm import chat_json
 from agent.tools.patch_apply import apply_patch_object
 from agent.tools.repo_introspect import list_files, snapshot
@@ -823,6 +830,11 @@ def main() -> None:
     issue_number = str(os.environ["ISSUE_NUMBER"])
     comment_body = os.environ.get("COMMENT_BODY", "")
 
+    # Always produce traceability files (even on failures)
+    os.makedirs("agent/out", exist_ok=True)
+    write_out("agent/out/branch.txt", "")
+    write_out("agent/out/pr_url.txt", "")
+
     issue = get_issue(repo, issue_number)
     issue_title = issue.get("title", "")
     issue_body = issue.get("body", "") or ""
@@ -926,7 +938,9 @@ def main() -> None:
     max_iterations = int(run_req.get("max_iterations", 2))
     base_branch = "main"
     branch_name = f"agent/issue-{issue_number}"
-    create_branch(branch_name, base_branch)
+    # Create or reuse the work branch (idempotent across reruns)
+    ensure_branch(branch_name, base=f"origin/{base_branch}")
+    write_out("agent/out/branch.txt", branch_name)
 
     pr_url = ""
     iteration_notes: List[str] = []
@@ -1030,8 +1044,8 @@ def main() -> None:
                         pass
 
                     raise RuntimeError(
-                        "Contract/API lock violado: se detectaron breaking changes (eliminación o cambio de firma/endpoint). "
-                        "Revisa agent/out/iter_{i}_contract_violations.json. "
+                        f"Contract/API lock violado: se detectaron breaking changes (eliminación o cambio de firma/endpoint). "
+                        f"Revisa agent/out/iter_{i}_contract_violations.json. "
                         "Política: solo cambios aditivos; si necesitas cambiar contrato, crea wrapper compatible o v2."
                     )
 
@@ -1048,7 +1062,6 @@ def main() -> None:
         # Persist both per-iteration and "last" for convenience
         write_out(f"agent/out/iter_{i}_test_output.txt", test_out)
         write_out("agent/out/last_test_output.txt", test_out)
-
 
         # --- ENTERPRISE: Java test discovery (Surefire) ---
         if str(run_req.get("stack") or "").startswith("java-") or (run_req.get("language") or "").lower() == "java":
@@ -1149,7 +1162,6 @@ def main() -> None:
 
         iteration_notes.append(f"Iteración {i}: test exit={test_exit} passed={bool(test_report.get('passed', False))}")
 
-
         failure_sig = stable_failure_signature(test_exit, test_out)
 
         try:
@@ -1163,6 +1175,32 @@ def main() -> None:
             stuck_count = 0
 
         last_failure_sig = failure_sig
+
+    # -------------------------------
+    # ENTERPRISE: Create PR when there are commits
+    # - Always write branch.txt and pr_url.txt for traceability
+    # - Idempotent: reuses existing PR if present
+    # -------------------------------
+    commits_ahead = git_commits_ahead(f"origin/{base_branch}", "HEAD")
+    if commits_ahead > 0:
+        try:
+            git_push(branch_name)
+        except Exception as e:
+            # Surface push failures clearly (often token/permissions)
+            write_out("agent/out/push_failed.txt", str(e))
+            raise
+
+        pr_title = f"agent: issue #{issue_number}"
+        pr_body = (
+            f"Automated changes for issue #{issue_number}.\n\n"
+            f"- Stack: {run_req.get('stack')}\n"
+            f"- Language: {run_req.get('language')}\n"
+            f"- Iterations: {len(iteration_notes)}\n\n"
+            "See agent/out artifacts for details."
+        )
+        pr_url = gh_pr_ensure(title=pr_title, body=pr_body, head=branch_name, base=base_branch)
+
+    write_out("agent/out/pr_url.txt", pr_url or "")
 
     summary_md = render_summary_md(issue_title, pr_url, iteration_notes, test_report)
     write_out("agent/out/summary.md", summary_md)
