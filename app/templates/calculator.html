@@ -12,8 +12,8 @@
         {{ form.as_p }}
         <button type="submit">Calcular</button>
     </form>
-    {% if monthly_payment %}
-        <h2>Pago mensual: {{ monthly_payment|floatformat:2 }}</h2>
+    {% if total_payment %}
+        <h2>Total a Pagar: {{ total_payment }}</h2>
     {% endif %}
 </body>
 </html>

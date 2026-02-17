@@ -1,0 +1,23 @@
+{
+  "notes": [
+    "Implementación de la calculadora de créditos y pruebas unitarias correspondientes."
+  ],
+  "files": {
+    "./app/views.py": {
+      "operation": "modify",
+      "content": "from django.shortcuts import render\nfrom .forms import CreditCalculatorForm\n\n\ndef credit_calculator(request):\n    if request.method == 'POST':\n        form = CreditCalculatorForm(request.POST)\n        if form.is_valid():\n            # Lógica de cálculo de créditos\n            amount = form.cleaned_data['amount']\n            interest_rate = form.cleaned_data['interest_rate']\n            term = form.cleaned_data['term']\n            total_payment = amount * (1 + interest_rate / 100) ** term\n            return render(request, 'calculator.html', {'form': form, 'total_payment': total_payment})\n    else:\n        form = CreditCalculatorForm()\n    return render(request, 'calculator.html', {'form': form})"
+    },
+    "./app/forms.py": {
+      "operation": "modify",
+      "content": "from django import forms\n\n\nclass CreditCalculatorForm(forms.Form):\n    amount = forms.DecimalField(label='Monto', max_digits=10, decimal_places=2)\n    interest_rate = forms.DecimalField(label='Tasa de Interés (%)', max_digits=5, decimal_places=2)\n    term = forms.IntegerField(label='Plazo (años)')"
+    },
+    "./app/templates/calculator.html": {
+      "operation": "modify",
+      "content": "<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Calculadora de Créditos</title>\n</head>\n<body>\n    <h1>Calculadora de Créditos</h1>\n    <form method=\"post\">\n        {% csrf_token %}\n        {{ form.as_p }}\n        <button type=\"submit\">Calcular</button>\n    </form>\n    {% if total_payment %}\n        <h2>Total a Pagar: {{ total_payment }}</h2>\n    {% endif %}\n</body>\n</html>"
+    },
+    "./app/tests/test_calculator.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom django.urls import reverse\nfrom .forms import CreditCalculatorForm\n\n\n@pytest.mark.django_db\ndef test_credit_calculator(client):\n    response = client.get(reverse('credit_calculator'))\n    assert response.status_code == 200\n    assert 'form' in response.context\n\n    # Simular envío de formulario\n    response = client.post(reverse('credit_calculator'), {\n        'amount': 10000,\n        'interest_rate': 5,\n        'term': 2\n    })\n    assert response.status_code == 200\n    assert 'total_payment' in response.context\n    # Cálculo esperado: 10000 * (1 + 0.05) ** 2 = 11025.0\n    assert response.context['total_payment'] == 11025.0"
+    }
+  }
+}
