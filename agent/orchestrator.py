@@ -5,6 +5,8 @@ import subprocess
 from typing import Any, Dict, List, Tuple
 import shlex
 import hashlib
+import glob
+import time
 
 from agent.stacks.registry import resolve_stack_spec, load_catalog
 from jsonschema import validate
@@ -304,6 +306,247 @@ def normalize_test_report(tr: Dict[str, Any], run_req: Dict[str, Any]) -> Dict[s
             out["recommended_patch"] = rp_norm
 
     return out
+
+
+def _read_text(path: str) -> str:
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def _is_test_path(p: str) -> bool:
+    p = p.replace("\\", "/").lower()
+    return (
+        "/test/" in p
+        or p.endswith("_test.go")
+        or p.endswith(".spec.ts")
+        or p.endswith(".spec.js")
+        or p.endswith(".test.ts")
+        or p.endswith(".test.js")
+        or "/__tests__/" in p
+        or "/tests/" in p
+    )
+
+
+def _glob_many(patterns: List[str]) -> List[str]:
+    out: List[str] = []
+    for pat in patterns:
+        out.extend(glob.glob(pat, recursive=True))
+    # unique, stable
+    seen = set()
+    uniq = []
+    for p in out:
+        if os.path.isfile(p) and p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    return sorted(uniq)
+
+
+def _snapshot_hash(payload: Dict[str, Any]) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
+# -------- Extractors (heurísticos, multi-stack) --------
+
+def _extract_java_public_symbols() -> List[Dict[str, Any]]:
+    files = _glob_many(["src/main/java/**/*.java"])
+    syms: List[Dict[str, Any]] = []
+
+    pkg_re = re.compile(r"(?m)^\s*package\s+([a-zA-Z0-9_.]+)\s*;")
+    class_re = re.compile(r"(?m)^\s*public\s+(?:final\s+|abstract\s+)?class\s+([A-Za-z_]\w*)")
+    iface_re = re.compile(r"(?m)^\s*public\s+interface\s+([A-Za-z_]\w*)")
+    enum_re  = re.compile(r"(?m)^\s*public\s+enum\s+([A-Za-z_]\w*)")
+
+    # Captura también nombres de params (clave para years↔months)
+    method_re = re.compile(
+        r"(?m)^\s*public\s+(?:static\s+)?(?:final\s+)?([A-Za-z_]\w*(?:<[^>]+>)?)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*\{?"
+    )
+
+    for fp in files:
+        if _is_test_path(fp):
+            continue
+        txt = _read_text(fp)
+
+        pkg = ""
+        m = pkg_re.search(txt)
+        if m:
+            pkg = m.group(1).strip()
+
+        def qname(x: str) -> str:
+            return f"{pkg}.{x}" if pkg else x
+
+        for m in class_re.finditer(txt):
+            syms.append({"kind": "java.class", "name": qname(m.group(1)), "path": fp})
+
+        for m in iface_re.finditer(txt):
+            syms.append({"kind": "java.interface", "name": qname(m.group(1)), "path": fp})
+
+        for m in enum_re.finditer(txt):
+            syms.append({"kind": "java.enum", "name": qname(m.group(1)), "path": fp})
+
+        for m in method_re.finditer(txt):
+            ret = m.group(1).strip()
+            name = m.group(2).strip()
+            args = re.sub(r"\s+", " ", m.group(3).strip())
+            syms.append({
+                "kind": "java.method",
+                "name": qname(name),
+                "signature": f"{ret} {name}({args})",
+                "path": fp,
+            })
+
+    return syms
+
+
+def _extract_spring_endpoints() -> List[Dict[str, Any]]:
+    files = _glob_many(["src/main/java/**/*.java"])
+    eps: List[Dict[str, Any]] = []
+
+    reqmap = re.compile(r'@RequestMapping\(\s*"(.*?)"\s*\)')
+    getmap = re.compile(r'@GetMapping\(\s*"(.*?)"\s*\)')
+    postmap = re.compile(r'@PostMapping\(\s*"(.*?)"\s*\)')
+    putmap = re.compile(r'@PutMapping\(\s*"(.*?)"\s*\)')
+    delmap = re.compile(r'@DeleteMapping\(\s*"(.*?)"\s*\)')
+
+    for fp in files:
+        if _is_test_path(fp):
+            continue
+        txt = _read_text(fp)
+        if "@RestController" not in txt and "@Controller" not in txt:
+            continue
+
+        base = ""
+        m = reqmap.search(txt)
+        if m:
+            base = m.group(1).strip()
+
+        for ann, method in [(getmap, "GET"), (postmap, "POST"), (putmap, "PUT"), (delmap, "DELETE")]:
+            for mm in ann.finditer(txt):
+                route = mm.group(1).strip()
+                full = (base.rstrip("/") + "/" + route.lstrip("/")).replace("//", "/") if base else route
+                eps.append({"kind": "http.endpoint", "method": method, "route": full, "path": fp})
+
+    return eps
+
+
+def generate_contract_snapshot(run_req: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Snapshot heurístico de contrato: símbolos públicos + endpoints.
+    Multi-stack: hoy implementamos Java+Spring (extensible).
+    """
+    lang = (run_req.get("language") or "").lower().strip()
+    stack = str(run_req.get("stack") or "")
+
+    symbols: List[Dict[str, Any]] = []
+    endpoints: List[Dict[str, Any]] = []
+
+    # Java/Spring
+    if lang == "java" or stack.startswith("java-") or os.path.exists("pom.xml") or _glob_many(["src/main/java/**/*.java"]):
+        symbols.extend(_extract_java_public_symbols())
+        endpoints.extend(_extract_spring_endpoints())
+
+    # Normalización: orden estable
+    def _key(x: Dict[str, Any]) -> str:
+        return json.dumps(x, ensure_ascii=False, sort_keys=True)
+
+    symbols = sorted([s for s in symbols if isinstance(s, dict)], key=_key)
+    endpoints = sorted([e for e in endpoints if isinstance(e, dict)], key=_key)
+
+    payload = {
+        "version": 1,
+        "ts": int(time.time()),
+        "stack": stack,
+        "language": lang,
+        "symbols": symbols,
+        "endpoints": endpoints,
+    }
+    payload["hash"] = _snapshot_hash({
+        "version": payload["version"],
+        "stack": payload["stack"],
+        "language": payload["language"],
+        "symbols": payload["symbols"],
+        "endpoints": payload["endpoints"],
+    })
+    return payload
+
+
+def _index_symbols(symbols: List[Dict[str, Any]]) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """
+    key = (kind, name) -> record
+    For methods: signature is used for lock
+    """
+    idx: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for s in symbols or []:
+        if not isinstance(s, dict):
+            continue
+        kind = str(s.get("kind") or "")
+        name = str(s.get("name") or "")
+        if not kind or not name:
+            continue
+        idx[(kind, name)] = s
+    return idx
+
+
+def _index_endpoints(eps: List[Dict[str, Any]]) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """
+    key = (method, route)
+    """
+    idx: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for e in eps or []:
+        if not isinstance(e, dict):
+            continue
+        m = str(e.get("method") or "").upper()
+        r = str(e.get("route") or "")
+        if not m or not r:
+            continue
+        idx[(m, r)] = e
+    return idx
+
+
+def enforce_api_lock(lock: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Enforce "no breaking changes":
+      - locked symbols/endpoints must still exist
+      - method signatures must not change
+    Allow additions.
+    Returns a violation report (empty if OK).
+    """
+    violations: Dict[str, Any] = {
+        "breaking": False,
+        "removed_symbols": [],
+        "changed_signatures": [],
+        "removed_endpoints": [],
+    }
+
+    lock_syms = _index_symbols(lock.get("symbols") or [])
+    cur_syms = _index_symbols(current.get("symbols") or [])
+
+    # Symbols: must exist; if method signature present, must match
+    for key, s in lock_syms.items():
+        if key not in cur_syms:
+            violations["removed_symbols"].append({"kind": key[0], "name": key[1], "path": s.get("path")})
+            continue
+        if key[0].endswith(".method"):
+            old_sig = str(s.get("signature") or "")
+            new_sig = str(cur_syms[key].get("signature") or "")
+            if old_sig and new_sig and old_sig != new_sig:
+                violations["changed_signatures"].append({
+                    "name": key[1],
+                    "from": old_sig,
+                    "to": new_sig,
+                    "path": cur_syms[key].get("path"),
+                })
+
+    lock_eps = _index_endpoints(lock.get("endpoints") or [])
+    cur_eps = _index_endpoints(current.get("endpoints") or [])
+    for key, e in lock_eps.items():
+        if key not in cur_eps:
+            violations["removed_endpoints"].append({"method": key[0], "route": key[1], "path": e.get("path")})
+
+    if violations["removed_symbols"] or violations["changed_signatures"] or violations["removed_endpoints"]:
+        violations["breaking"] = True
+
+    return violations
 
 
 def _has_shell_metachars(cmd: str) -> bool:
@@ -757,6 +1000,40 @@ def main() -> None:
         if not changed_files:
             iteration_notes.append(f"Iteración {i}: sin cambios detectados (skip)")
             continue
+
+        # --- CONTRACT SNAPSHOT + API LOCK (enterprise, stack-agnostic by heuristics) ---
+        snap = generate_contract_snapshot(run_req)
+        write_out(f"agent/out/iter_{i}_contract_snapshot.json", json.dumps(snap, ensure_ascii=False, indent=2))
+        write_out("agent/out/contract_snapshot.json", json.dumps(snap, ensure_ascii=False, indent=2))
+
+        lock_path = "agent/out/contract_lock.json"
+        if not os.path.exists(lock_path):
+            # Initialize lock on first iteration that actually changes files.
+            # This prevents "years↔months" drift in later iterations.
+            write_out(lock_path, json.dumps(snap, ensure_ascii=False, indent=2))
+        else:
+            try:
+                lock = json.loads(open(lock_path, "r", encoding="utf-8").read())
+            except Exception:
+                lock = None
+
+            if isinstance(lock, dict):
+                violations = enforce_api_lock(lock, snap)
+                write_out(f"agent/out/iter_{i}_contract_violations.json", json.dumps(violations, ensure_ascii=False, indent=2))
+
+                if violations.get("breaking"):
+                    # Revert uncommitted changes to keep repo clean
+                    try:
+                        subprocess.run(["git", "checkout", "--", "."], text=True, capture_output=True)
+                        subprocess.run(["git", "clean", "-fd"], text=True, capture_output=True)
+                    except Exception:
+                        pass
+
+                    raise RuntimeError(
+                        "Contract/API lock violado: se detectaron breaking changes (eliminación o cambio de firma/endpoint). "
+                        "Revisa agent/out/iter_{i}_contract_violations.json. "
+                        "Política: solo cambios aditivos; si necesitas cambiar contrato, crea wrapper compatible o v2."
+                    )
 
         # git status debug
         _, status_porcelain = run_cmd("git status --porcelain")
