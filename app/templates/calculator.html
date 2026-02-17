@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calculadora de Créditos</title>
+</head>
+<body>
+    <h1>Calculadora de Créditos</h1>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">Calcular</button>
+    </form>
+    {% if total_payment %}
+        <h2>Total a Pagar: {{ total_payment }}</h2>
+    {% endif %}
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "stack_id": "python-django",
+  "language": "python",
+  "markers_any_of": [
+    "manage.py",
+    "pyproject.toml",
+    "requirements.txt"
+  ],
+  "markers_found": false,
+  "bootstrap_kind": "none",
+  "bootstrap_applied": false,
+  "created_files": [],
+  "commands_run": [],
+  "notes": [
+    "Markers missing; attempting bootstrap.",
+    "bootstrap.kind is none/unknown; cannot scaffold automatically.",
+    "Markers still missing after bootstrap."
+  ],
+  "markers_found_after": false
+}
