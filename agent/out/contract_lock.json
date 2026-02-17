@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "ts": 1771356674,
+  "stack": "java-spring-boot",
+  "language": "java",
+  "symbols": [
+    {
+      "kind": "java.class",
+      "name": "com.example.Application",
+      "path": "src/main/java/com/example/Application.java"
+    },
+    {
+      "kind": "java.class",
+      "name": "com.example.app.CreditCalculatorService",
+      "path": "src/main/java/com/example/app/CreditCalculatorService.java"
+    },
+    {
+      "kind": "java.method",
+      "name": "com.example.app.calculateCredit",
+      "signature": "double calculateCredit(double amount, double interestRate, int years)",
+      "path": "src/main/java/com/example/app/CreditCalculatorService.java"
+    },
+    {
+      "kind": "java.method",
+      "name": "com.example.main",
+      "signature": "void main(String[] args)",
+      "path": "src/main/java/com/example/Application.java"
+    }
+  ],
+  "endpoints": [],
+  "hash": "3e90bf7256adb7c1"
+}
