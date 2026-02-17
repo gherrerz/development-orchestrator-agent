@@ -767,7 +767,11 @@ def main() -> None:
         # RUN TESTS (sin shell)
         test_cmd = run_req.get("test_command") or ""
         test_exit, test_out = run_cmd(test_cmd)
+
+        # Persist both per-iteration and "last" for convenience
+        write_out(f"agent/out/iter_{i}_test_output.txt", test_out)
         write_out("agent/out/last_test_output.txt", test_out)
+
 
         # --- ENTERPRISE: Java test discovery (Surefire) ---
         if str(run_req.get("stack") or "").startswith("java-") or (run_req.get("language") or "").lower() == "java":
@@ -844,7 +848,30 @@ def main() -> None:
         test_report = normalize_test_report(tr, run_req)
         safe_validate(test_report, TEST_SCHEMA, "test_report.schema.json")
 
-        iteration_notes.append(f"Iteración {i}: test exit={test_exit}")
+        # -------------------------------
+        # ENTERPRISE: Early stop on success
+        # Avoid regressions by continuing to iterate after tests already pass.
+        # This is stack-agnostic.
+        # -------------------------------
+        try:
+            passed = bool(test_report.get("passed", False))
+        except Exception:
+            passed = False
+
+        ac_status = test_report.get("acceptance_criteria_status", [])
+        all_met = False
+        if isinstance(ac_status, list) and ac_status:
+            all_met = all(bool(x.get("met", False)) for x in ac_status if isinstance(x, dict))
+        else:
+            # If no AC provided, treat "passed" as sufficient
+            all_met = True
+
+        if int(test_exit) == 0 and passed and all_met:
+            iteration_notes.append(f"Iteración {i}: ✅ passed (early stop)")
+            break
+
+        iteration_notes.append(f"Iteración {i}: test exit={test_exit} passed={bool(test_report.get('passed', False))}")
+
 
         failure_sig = stable_failure_signature(test_exit, test_out)
 
