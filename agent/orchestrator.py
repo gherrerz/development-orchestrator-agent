@@ -348,6 +348,46 @@ def _glob_many(patterns: List[str]) -> List[str]:
     return sorted(uniq)
 
 
+def _exists_any_glob(patterns: List[str]) -> bool:
+    for pat in patterns or []:
+        try:
+            if _glob_many([pat]):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _catalog_entry(catalog: Dict[str, Any], stack_id: str) -> Dict[str, Any]:
+    stacks = catalog.get("stacks") if isinstance(catalog, dict) else None
+    if isinstance(stacks, dict) and isinstance(stacks.get(stack_id), dict):
+        return stacks[stack_id]
+    return {}
+
+
+def _markers_found_for_stack(catalog: Dict[str, Any], stack_id: str) -> bool:
+    entry = _catalog_entry(catalog, stack_id)
+    markers = entry.get("markers") if isinstance(entry.get("markers"), dict) else {}
+    any_of = markers.get("any_of") or []
+    if not isinstance(any_of, list) or not any_of:
+        return False
+    return _exists_any_glob(any_of)
+
+
+def _repo_has_any_stack_markers(catalog: Dict[str, Any]) -> bool:
+    stacks = catalog.get("stacks") if isinstance(catalog, dict) else {}
+    if not isinstance(stacks, dict):
+        return False
+    for sid, entry in stacks.items():
+        if not isinstance(entry, dict):
+            continue
+        markers = entry.get("markers") if isinstance(entry.get("markers"), dict) else {}
+        any_of = markers.get("any_of") or []
+        if isinstance(any_of, list) and any_of and _exists_any_glob(any_of):
+            return True
+    return False
+
+
 def _snapshot_hash(payload: Dict[str, Any]) -> str:
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
@@ -618,6 +658,34 @@ def is_safe_test_command(cmd: str, allowed_prefixes: List[str]) -> bool:
     return True
 
 
+def _is_transient_path(p: str) -> bool:
+    pp = (p or "").replace("\\", "/").strip()
+    if not pp:
+        return True
+    transient_prefixes = (
+        "agent/out/",
+        "agent/__pycache__/",
+        "agent/stacks/__pycache__/",
+        "agent/tools/__pycache__/",
+        ".pytest_cache/",
+        "__pycache__/",
+        "target/",
+        "build/",
+        "dist/",
+        ".mvn/",
+        ".gradle/",
+        "node_modules/",
+        ".venv/",
+        "venv/",
+        ".tox/",
+        ".coverage",
+        "coverage/",
+    )
+    if pp.endswith(".pyc") or pp.endswith(".pyo"):
+        return True
+    return any(pp.startswith(x) or (x in ("__pycache__/",) and "/__pycache__/" in pp) for x in transient_prefixes)
+
+
 def run_cmd(cmd: str) -> Tuple[int, str]:
     args = shlex.split(cmd)
     p = subprocess.run(args, text=True, capture_output=True)
@@ -645,6 +713,9 @@ def detect_repo_changes() -> List[str]:
                 if " -> " in path:
                     path = path.split(" -> ", 1)[1].strip()
                 changed.add(path)
+
+    filtered = [p for p in sorted(changed) if not _is_transient_path(p)]
+    return filtered
 
     return sorted(changed)
 
@@ -754,6 +825,29 @@ def _attempt_plan_repair_once(
     write_out("agent/out/plan_repaired.json", json.dumps(repaired, ensure_ascii=False, indent=2))
     return repaired
 
+def parse_pytest_telemetry(out: str) -> Dict[str, int]:
+    txt = (out or "")
+    def _m(pat: str) -> int:
+        m = re.search(pat, txt, re.IGNORECASE)
+        return int(m.group(1)) if m else 0
+
+    passed = _m(r"(\d+)\s+passed")
+    failed = _m(r"(\d+)\s+failed")
+    errors = _m(r"(\d+)\s+error")
+    skipped = _m(r"(\d+)\s+skipped")
+    xfailed = _m(r"(\d+)\s+xfailed")
+    xpassed = _m(r"(\d+)\s+xpassed")
+    total = passed + failed + errors + skipped + xfailed + xpassed
+    return {
+        "passed": passed,
+        "failed": failed,
+        "errors": errors,
+        "skipped": skipped,
+        "xfailed": xfailed,
+        "xpassed": xpassed,
+        "total": total,
+    }
+
 
 def discover_maven_surefire_tests() -> Dict[str, Any]:
     """
@@ -842,7 +936,42 @@ def main() -> None:
     run_req = extract_json_from_comment(comment_body)
 
     catalog = load_catalog()
+
+    # --- ENTERPRISE: stack mismatch guard + auto fallback by markers ---
+    requested_stack = str(run_req.get("stack") or "").strip()
+    explicit_stack = bool(requested_stack and requested_stack.lower() not in ("auto",))
+
     spec = resolve_stack_spec(run_req, repo_root=".", catalog=catalog)
+
+    if explicit_stack and not _markers_found_for_stack(catalog, spec.stack_id):
+        # If repo looks like SOME other stack, do NOT try to run tests with a mismatched stack.
+        if _repo_has_any_stack_markers(catalog):
+            fallback_req = dict(run_req)
+            fallback_req["stack"] = "auto"
+            spec2 = resolve_stack_spec(fallback_req, repo_root=".", catalog=catalog)
+
+            if _markers_found_for_stack(catalog, spec2.stack_id):
+                write_out(
+                    "agent/out/stack_resolution.txt",
+                    (
+                        f"Stack mismatch: requested='{requested_stack}' but markers not found. "
+                        f"Fallback to auto-detected='{spec2.stack_id}'."
+                    ),
+                )
+                spec = spec2
+                run_req["stack"] = spec.stack_id
+                run_req["language"] = spec.language
+            else:
+                raise ValueError(
+                    f"Stack mismatch: requested='{requested_stack}' but no markers found, and auto-detect also failed. "
+                    "Corrige 'stack' o agrega bootstrap en el StackSpec."
+                )
+        else:
+            # Empty/unknown repo: allow continuing only if bootstrap exists (handled in stack_setup), otherwise fail early.
+            raise ValueError(
+                f"Stack mismatch: requested='{requested_stack}' pero el repo no contiene markers para ese stack. "
+                "Si quieres crear un proyecto desde cero, agrega bootstrap en catalog.yml o usa stack='auto'."
+            )
 
     run_req["stack"] = spec.stack_id or (run_req.get("stack") or "auto")
     run_req["language"] = spec.language or (run_req.get("language") or "generic")
@@ -1058,6 +1187,25 @@ def main() -> None:
         # RUN TESTS (sin shell)
         test_cmd = run_req.get("test_command") or ""
         test_exit, test_out = run_cmd(test_cmd)
+
+        telemetry = {}
+        effective_exit = int(test_exit)
+
+        # --- ENTERPRISE: meaningful-tests gate (esp. pytest exit=0 con skipped/0 tests) ---
+        if (run_req.get("language") or "").lower().strip() == "python":
+            telemetry = parse_pytest_telemetry(test_out)
+            write_out(f"agent/out/iter_{i}_test_telemetry.json", json.dumps(telemetry, ensure_ascii=False, indent=2))
+
+            # Si pytest exit=0 pero no ejecutó tests "reales", forzar fallo lógico
+            no_meaningful = (telemetry.get("total", 0) == 0) or (
+                telemetry.get("passed", 0) == 0 and telemetry.get("failed", 0) == 0 and telemetry.get("errors", 0) == 0
+            )
+            if effective_exit == 0 and no_meaningful:
+                effective_exit = 2  # consistente con "test failures"
+                test_out = (test_out or "") + "\n\n[enterprise] No meaningful tests executed (all skipped or none collected). Treating as failure.\n"
+
+        # usar effective_exit desde aquí en adelante
+        test_exit = effective_exit
 
         # Persist both per-iteration and "last" for convenience
         write_out(f"agent/out/iter_{i}_test_output.txt", test_out)
