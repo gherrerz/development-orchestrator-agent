@@ -1,0 +1,19 @@
+{
+  "notes": [
+    "Implementada la lógica de la calculadora de créditos y se han agregado pruebas unitarias correspondientes."
+  ],
+  "files": {
+    "./app/calculator.py": {
+      "operation": "modify",
+      "content": "def calcular_credito(monto, tasa_interes, plazo):\n    \"\"\"\n    Calcula el pago mensual de un crédito basado en el monto, la tasa de interés y el plazo.\n    \"\"\"\n    tasa_mensual = tasa_interes / 100 / 12\n    num_pagos = plazo * 12\n    pago_mensual = (monto * tasa_mensual) / (1 - (1 + tasa_mensual) ** -num_pagos)\n    return round(pago_mensual, 2)\n\n\n# Ejemplo de uso\nif __name__ == '__main__':\n    monto = 10000\n    tasa_interes = 5\n    plazo = 2\n    print(f'Pago mensual: {calcular_credito(monto, tasa_interes, plazo)}')\n"
+    },
+    "./app/views.py": {
+      "operation": "modify",
+      "content": "from django.shortcuts import render\nfrom .calculator import calcular_credito\n\n\ndef calcular_credito_view(request):\n    if request.method == 'POST':\n        monto = float(request.POST.get('monto'))\n        tasa_interes = float(request.POST.get('tasa_interes'))\n        plazo = int(request.POST.get('plazo'))\n        pago_mensual = calcular_credito(monto, tasa_interes, plazo)\n        return render(request, 'resultado.html', {'pago_mensual': pago_mensual})\n    return render(request, 'calculo.html')\n"
+    },
+    "./tests/test_calculator.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom app.calculator import calcular_credito\n\n\ndef test_calcular_credito():\n    # Caso de prueba: monto=10000, tasa_interes=5, plazo=2\n    resultado = calcular_credito(10000, 5, 2)\n    esperado = 549.86  # Cálculo: (10000 * (5/100/12)) / (1 - (1 + (5/100/12)) ** -(2*12))\n    assert resultado == pytest.approx(esperado, rel=1e-2)\n\n    # Caso de prueba: monto=20000, tasa_interes=3, plazo=1\n    resultado = calcular_credito(20000, 3, 1)\n    esperado = 1710.69  # Cálculo: (20000 * (3/100/12)) / (1 - (1 + (3/100/12)) ** -(1*12))\n    assert resultado == pytest.approx(esperado, rel=1e-2)\n"
+    }
+  }
+}

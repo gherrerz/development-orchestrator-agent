@@ -1,15 +1,12 @@
 from django.shortcuts import render
-from .calculator import CreditCalculator
+from .calculator import calcular_credito
 
 
-def calculate_credit(request):
+def calcular_credito_view(request):
     if request.method == 'POST':
-        principal = float(request.POST.get('principal'))
-        rate = float(request.POST.get('rate'))
-        time = float(request.POST.get('time'))
-        calculator = CreditCalculator(principal, rate, time)
-        total_payment = calculator.calculate_total_payment()
-        monthly_payment = calculator.calculate_monthly_payment()
-        interest = calculator.calculate_interest()
-        return render(request, 'result.html', {'total_payment': total_payment, 'monthly_payment': monthly_payment, 'interest': interest})
-    return render(request, 'calculator.html')
+        monto = float(request.POST.get('monto'))
+        tasa_interes = float(request.POST.get('tasa_interes'))
+        plazo = int(request.POST.get('plazo'))
+        pago_mensual = calcular_credito(monto, tasa_interes, plazo)
+        return render(request, 'resultado.html', {'pago_mensual': pago_mensual})
+    return render(request, 'calculo.html')

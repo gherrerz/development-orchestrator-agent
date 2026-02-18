@@ -1,15 +1,14 @@
 import pytest
-from app.calculator import CreditCalculator
+from app.calculator import calcular_credito
 
-class TestCreditCalculator:
-    def test_calculate_total_payment(self):
-        calculator = CreditCalculator(1000, 0.05, 2)
-        assert calculator.calculate_total_payment() == 1100.0  # 1000 * (1 + 0.05 * 2)
 
-    def test_calculate_monthly_payment(self):
-        calculator = CreditCalculator(1000, 0.05, 2)
-        assert calculator.calculate_monthly_payment() == pytest.approx(45.8333, rel=1e-5)  # 1100 / 24
+def test_calcular_credito():
+    # Caso de prueba: monto=10000, tasa_interes=5, plazo=2
+    resultado = calcular_credito(10000, 5, 2)
+    esperado = 549.86  # Cálculo: (10000 * (5/100/12)) / (1 - (1 + (5/100/12)) ** -(2*12))
+    assert resultado == pytest.approx(esperado, rel=1e-2)
 
-    def test_calculate_interest(self):
-        calculator = CreditCalculator(1000, 0.05, 2)
-        assert calculator.calculate_interest() == 100.0  # 1100 - 1000
+    # Caso de prueba: monto=20000, tasa_interes=3, plazo=1
+    resultado = calcular_credito(20000, 3, 1)
+    esperado = 1710.69  # Cálculo: (20000 * (3/100/12)) / (1 - (1 + (3/100/12)) ** -(1*12))
+    assert resultado == pytest.approx(esperado, rel=1e-2)
