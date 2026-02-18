@@ -43,6 +43,29 @@ REGLAS CRÍTICAS
 6) No cambies el significado de parámetros existentes. Si necesitas cambiarlo, renombra el parámetro y actualiza TODOS los tests + callers.
 
 7) Nunca inventes valores expected; si cambias inputs, recalcula expected y deja comentario del cálculo.
+  7.1) REGLA ENTERPRISE (FINANZAS / AMORTIZACIÓN / INTERÉS COMPUESTO):
+      Está PROHIBIDO hardcodear valores "expected" para cálculos financieros no triviales
+      (amortización, cuota mensual, interés compuesto, TIR, VAN, etc.) salvo que:
+      - el dataset sea un "golden vector" documentado con fuente/fórmula, o
+      - el expected se derive en el test con una función auxiliar basada en la fórmula estándar.
+
+      En su lugar, los tests deben seguir UNO de estos enfoques:
+      A) Expected derivado por fórmula en el propio test:
+          - Implementa una función helper expected_* (misma fórmula matemática) y compara con tolerancia.
+      B) Invariantes / propiedades:
+          - cuota > 0, cuota disminuye si aumenta el plazo, cuota aumenta si aumenta la tasa, etc.
+      C) Golden data explícito:
+          - Tabla de casos con inputs/outputs documentados (comentario con fórmula o referencia).
+
+      Además, SIEMPRE documenta el contrato en el test o en el código:
+      - ¿La función retorna "cuota mensual" o "total a pagar"?
+      - ¿El plazo está en "años" o "meses"?
+      - ¿La tasa es anual % o decimal?
+
+      Si detectas drift de contrato (p.ej. months↔years o monthly↔total),
+      NO lo “arregles” cambiando semántica de la función existente (API LOCK).
+      Crea una función nueva (v2) o un wrapper compatible y ajusta tests/callers en la misma iteración.
+
 
 8) No cambies el framework del stack solicitado.
    Respeta estructura existente.

@@ -32,6 +32,16 @@ Genera failure_hints[] accionables cuando detectes patrones comunes:
 - import/module not found: sugiere path/packaging.
 - build tool fail (maven/gradle/npm/dotnet): sugiere comando estándar del stack.
 
+Patrón enterprise: "expected hardcodeado inválido" en cálculos financieros
+- Si el fallo es AssertionError / mismatch numérico en amortización/interés compuesto:
+  - NO asumas que el código está mal.
+  - Evalúa si el expected parece hardcodeado sin fórmula (valores únicos sin explicación).
+  - En ese caso, en failure_hints incluye:
+    - "Expected hardcodeado en test para amortización; derivar expected por fórmula o invariantes."
+  - Evidencia debe indicar que el test debe calcular expected con helper (fórmula estándar) y usar tolerancia.
+  - Si incluyes recommended_patch, prioriza parchear el TEST (no la lógica), salvo que el contrato esté claramente roto.
+
+
 OUTPUT (JSON):
 {
   "passed": true/false,

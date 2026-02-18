@@ -174,7 +174,7 @@ python-django:
           [pytest]
           DJANGO_SETTINGS_MODULE = config.settings
           python_files = test_*.py *_test.py tests.py
-          addopts = -q
+          addopts = -ra
 
       # Test mínimo "meaningful" para que pytest siempre ejecute algo
       - path: "tests/test_smoke.py"
@@ -194,7 +194,7 @@ python-django:
       - pytest-django
 
   commands:
-    test: "pytest -q"
+    test: "pytest -ra"
 
   allowed_test_prefixes:
     - "pytest"
