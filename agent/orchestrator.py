@@ -357,12 +357,24 @@ def _exists_any_glob(patterns: List[str]) -> bool:
             continue
     return False
 
+def _catalog_stacks_view(catalog: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Soporta ambos formatos:
+      A) mapping plano (tu caso): { "python-django": {...}, "java-spring-boot": {...} }
+      B) wrapper: { "stacks": { ... } }
+    """
+    if not isinstance(catalog, dict):
+        return {}
+    stacks = catalog.get("stacks")
+    if isinstance(stacks, dict):
+        return stacks
+    return catalog
+
 
 def _catalog_entry(catalog: Dict[str, Any], stack_id: str) -> Dict[str, Any]:
-    stacks = catalog.get("stacks") if isinstance(catalog, dict) else None
-    if isinstance(stacks, dict) and isinstance(stacks.get(stack_id), dict):
-        return stacks[stack_id]
-    return {}
+    stacks = _catalog_stacks_view(catalog)
+    entry = stacks.get(stack_id) if isinstance(stacks, dict) else None
+    return entry if isinstance(entry, dict) else {}
 
 
 def _markers_found_for_stack(catalog: Dict[str, Any], stack_id: str) -> bool:
@@ -375,10 +387,10 @@ def _markers_found_for_stack(catalog: Dict[str, Any], stack_id: str) -> bool:
 
 
 def _repo_has_any_stack_markers(catalog: Dict[str, Any]) -> bool:
-    stacks = catalog.get("stacks") if isinstance(catalog, dict) else {}
+    stacks = _catalog_stacks_view(catalog)
     if not isinstance(stacks, dict):
         return False
-    for sid, entry in stacks.items():
+    for _sid, entry in stacks.items():
         if not isinstance(entry, dict):
             continue
         markers = entry.get("markers") if isinstance(entry.get("markers"), dict) else {}
@@ -386,6 +398,12 @@ def _repo_has_any_stack_markers(catalog: Dict[str, Any]) -> bool:
         if isinstance(any_of, list) and any_of and _exists_any_glob(any_of):
             return True
     return False
+
+
+def _bootstrap_kind_for_stack(catalog: Dict[str, Any], stack_id: str) -> str:
+    entry = _catalog_entry(catalog, stack_id)
+    bootstrap = entry.get("bootstrap") if isinstance(entry.get("bootstrap"), dict) else {}
+    return str(bootstrap.get("kind") or "none").strip().lower()
 
 
 def _snapshot_hash(payload: Dict[str, Any]) -> str:
@@ -967,11 +985,24 @@ def main() -> None:
                     "Corrige 'stack' o agrega bootstrap en el StackSpec."
                 )
         else:
-            # Empty/unknown repo: allow continuing only if bootstrap exists (handled in stack_setup), otherwise fail early.
-            raise ValueError(
-                f"Stack mismatch: requested='{requested_stack}' pero el repo no contiene markers para ese stack. "
-                "Si quieres crear un proyecto desde cero, agrega bootstrap en catalog.yml o usa stack='auto'."
+            # Repo sin markers detectables (greenfield o repo-orquestador).
+            # NO fallar si el stack solicitado define bootstrap: stack_setup hará scaffold.
+            bk = _bootstrap_kind_for_stack(catalog, requested_stack)
+
+            write_out(
+                "agent/out/stack_resolution.txt",
+                (
+                    f"Repo has no stack markers. Keeping requested stack='{requested_stack}'. "
+                    f"bootstrap.kind='{bk}'. stack_setup will scaffold if configured."
+                ),
             )
+
+            # Fail-fast SOLO si no hay bootstrap definido para este stack
+            if bk in ("none", "", "unknown"):
+                raise ValueError(
+                    f"Stack mismatch: requested='{requested_stack}' pero el repo no contiene markers "
+                    "y este stack no define bootstrap. Usa stack='auto' o agrega bootstrap en catalog.yml."
+                )
 
     run_req["stack"] = spec.stack_id or (run_req.get("stack") or "auto")
     run_req["language"] = spec.language or (run_req.get("language") or "generic")
