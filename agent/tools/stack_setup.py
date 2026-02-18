@@ -39,7 +39,13 @@ def write_file_if_missing(rel_path: str, content: str) -> bool:
 
 
 def load_stack_entry(catalog: Dict[str, Any], stack_id: str) -> Dict[str, Any]:
-    entry = catalog.get(stack_id) or {}
+    if not isinstance(catalog, dict):
+        return {}
+    stacks = catalog.get("stacks")
+    if isinstance(stacks, dict):
+        entry = stacks.get(stack_id) or {}
+    else:
+        entry = catalog.get(stack_id) or {}
     return entry if isinstance(entry, dict) else {}
 
 

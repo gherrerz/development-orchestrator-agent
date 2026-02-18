@@ -3,7 +3,7 @@ import os
 import re
 import sys
 import glob
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from agent.stacks.registry import resolve_stack_spec, load_catalog
 
@@ -52,11 +52,38 @@ def _exists_any_glob(patterns: List[str]) -> bool:
     return False
 
 
+def _catalog_stacks_view(catalog: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Soporta ambos formatos:
+      A) mapping plano: { "python-django": {...}, "java-spring-boot": {...} }
+      B) wrapper: { "stacks": { ... } }
+    """
+    if not isinstance(catalog, dict):
+        return {}
+    stacks = catalog.get("stacks")
+    if isinstance(stacks, dict):
+        return stacks
+    return catalog  # mapping plano
+
+
+def _catalog_stacks_view(catalog: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Soporta ambos formatos:
+      A) mapping plano: { "python-django": {...}, "java-spring-boot": {...} }
+      B) wrapper: { "stacks": { ... } }
+    """
+    if not isinstance(catalog, dict):
+        return {}
+    stacks = catalog.get("stacks")
+    if isinstance(stacks, dict):
+        return stacks
+    return catalog
+
+
 def _catalog_entry(catalog: Dict[str, Any], stack_id: str) -> Dict[str, Any]:
-    stacks = catalog.get("stacks") if isinstance(catalog, dict) else None
-    if isinstance(stacks, dict) and isinstance(stacks.get(stack_id), dict):
-        return stacks[stack_id]
-    return {}
+    stacks = _catalog_stacks_view(catalog)
+    entry = stacks.get(stack_id) if isinstance(stacks, dict) else None
+    return entry if isinstance(entry, dict) else {}
 
 
 def _markers_found_for_stack(catalog: Dict[str, Any], stack_id: str) -> bool:
@@ -69,7 +96,7 @@ def _markers_found_for_stack(catalog: Dict[str, Any], stack_id: str) -> bool:
 
 
 def _repo_has_any_stack_markers(catalog: Dict[str, Any]) -> bool:
-    stacks = catalog.get("stacks") if isinstance(catalog, dict) else {}
+    stacks = _catalog_stacks_view(catalog)
     if not isinstance(stacks, dict):
         return False
     for _sid, entry in stacks.items():
@@ -82,60 +109,74 @@ def _repo_has_any_stack_markers(catalog: Dict[str, Any]) -> bool:
     return False
 
 
+def _bootstrap_kind_for_stack(catalog: Dict[str, Any], stack_id: str) -> str:
+    entry = _catalog_entry(catalog, stack_id)
+    bootstrap = entry.get("bootstrap") if isinstance(entry.get("bootstrap"), dict) else {}
+    return str(bootstrap.get("kind") or "none").strip().lower()
+
+
+def _bootstrap_kind_for_stack(catalog: Dict[str, Any], stack_id: str) -> str:
+    entry = _catalog_entry(catalog, stack_id)
+    bootstrap = entry.get("bootstrap") if isinstance(entry.get("bootstrap"), dict) else {}
+    return str(bootstrap.get("kind") or "none").strip().lower()
+
+
 def main() -> None:
     body = os.environ.get("COMMENT_BODY", "")
     req = extract_json_from_comment(body)
 
-    # --- ENTERPRISE: stack mismatch guard + auto fallback by markers ---
     catalog = load_catalog()
 
     requested_stack = str(req.get("stack") or "").strip()
     explicit_stack = bool(requested_stack and requested_stack.lower() not in ("auto",))
 
-    # First resolve with what the user requested
+    # Resolve with requested
     spec = resolve_stack_spec(req, repo_root=".", catalog=catalog)
 
-    # If user explicitly asked for a stack but repo markers don't match it,
-    # and repo has markers for some stack, fallback to auto-detected stack.
+    # If explicit stack but markers not found:
     if explicit_stack and not _markers_found_for_stack(catalog, spec.stack_id):
         if _repo_has_any_stack_markers(catalog):
+            # Repo ya parece "otro stack": fallback a auto
             fallback_req = dict(req)
             fallback_req["stack"] = "auto"
             spec2 = resolve_stack_spec(fallback_req, repo_root=".", catalog=catalog)
 
             if _markers_found_for_stack(catalog, spec2.stack_id):
-                # Persist traceability for debugging
-                try:
-                    os.makedirs("agent/out", exist_ok=True)
-                    with open("agent/out/stack_resolution.txt", "w", encoding="utf-8") as f:
-                        f.write(
-                            f"Stack mismatch: requested='{requested_stack}' but markers not found. "
-                            f"Fallback to auto-detected='{spec2.stack_id}'.\n"
-                        )
-                except Exception:
-                    pass
-
-                spec = spec2
-            else:
-                # Auto-detect also failed despite repo having some markers (edge case).
-                raise ValueError(
-                    f"Stack mismatch: requested='{requested_stack}' pero no hay markers; "
-                    "auto-detect también falló. Corrige 'stack' o revisa catalog.yml markers."
-                )
-        else:
-            # Repo has no markers at all (greenfield / empty). Don't override:
-            # stack_setup/bootstrap should decide what to do.
-            try:
                 os.makedirs("agent/out", exist_ok=True)
                 with open("agent/out/stack_resolution.txt", "w", encoding="utf-8") as f:
                     f.write(
-                        f"Repo has no stack markers. Keeping requested stack='{requested_stack}'. "
-                        "Bootstrap (if configured) will be applied later by stack_setup.\n"
+                        f"Stack mismatch: requested='{requested_stack}' but markers not found. "
+                        f"Fallback to auto-detected='{spec2.stack_id}'.\n"
                     )
-            except Exception:
-                pass
+                spec = spec2
+            else:
+                # Repo sin markers (greenfield / repo-orquestador). No fallar aquí:
+                # permitir que stack_setup/bootstrap scaffoldée el proyecto del stack solicitado.
+                bk = _bootstrap_kind_for_stack(catalog, requested_stack)
+                write_out(
+                    "agent/out/stack_resolution.txt",
+                    (
+                        f"Repo has no stack markers. Keeping requested stack='{requested_stack}'. "
+                        f"bootstrap.kind='{bk}'. stack_setup will scaffold if configured."
+                    ),
+                )
+                # Si NO hay bootstrap configurado, recién ahí conviene fallar (fail-fast)
+                if bk in ("none", "", "unknown"):
+                    raise ValueError(
+                        f"Stack mismatch: requested='{requested_stack}' pero el repo no contiene markers "
+                        "y este stack no define bootstrap. Usa stack='auto' o agrega bootstrap en catalog.yml."
+                    )
+        else:
+            # Repo no tiene markers de ningún stack (greenfield / repo-orquestador):
+            # mantén el stack solicitado; stack_setup/bootstrap hará el scaffold.
+            bk = _bootstrap_kind_for_stack(catalog, requested_stack)
+            os.makedirs("agent/out", exist_ok=True)
+            with open("agent/out/stack_resolution.txt", "w", encoding="utf-8") as f:
+                f.write(
+                    f"Repo has no stack markers. Keeping requested stack='{requested_stack}'. "
+                    f"bootstrap.kind='{bk}'. stack_setup will scaffold if configured.\n"
+                )
 
-    # Emit GitHub Actions outputs
     out_path = os.environ.get("GITHUB_OUTPUT")
     outputs = {
         "stack": spec.stack_id,
