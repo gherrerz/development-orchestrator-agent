@@ -334,6 +334,72 @@ def _is_test_path(p: str) -> bool:
     )
 
 
+def _read_file_safe(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
+def detect_financial_expected_antipattern(changed_files: List[str]) -> Dict[str, Any]:
+    """
+    Policy (enterprise): en tests financieros NO se permite hardcodear expected "manual/derivado"
+    si no es un golden vector documentado o expected derivado por fórmula/helper.
+
+    Heurística simple y efectiva (multi-stack):
+    - Solo mira archivos de test cambiados.
+    - Busca variables típicas expected + literal numérico + marcador humano ("manual", "derivado", "known", "valores conocidos").
+    """
+    markers = [
+        r"c[aá]lculo\s+manual",
+        r"derivad[oa]",
+        r"valores?\s+conocid[oa]s",
+        r"known\s+value",
+        r"hand\s*calc",
+        r"manual\s+calc",
+    ]
+
+    # variables expected típicas para finanzas/amortización
+    expected_vars = [
+        r"cuota_esperada",
+        r"pago_esperado",
+        r"monthly_payment_expected",
+        r"expected_monthly_payment",
+        r"expectedPayment",
+        r"expected",
+    ]
+
+    # asignación con número (int/float) en varios lenguajes
+    assign_number = r"(?:=|:)\s*\d+(?:\.\d+)?"
+
+    # comentario (py/js/java/c#) con marker humano
+    comment_with_marker = r"(?:#|//|/\*)\s*(?:" + "|".join(markers) + r")"
+
+    # patrón combinado: var expected + = número + comentario marker
+    pattern = re.compile(
+        r"(?is)\b(" + "|".join(expected_vars) + r")\b\s*" + assign_number + r".{0,80}?" + comment_with_marker
+    )
+
+    suspects: List[Dict[str, Any]] = []
+    for p in changed_files or []:
+        p2 = p.replace("\\", "/")
+        if not _is_test_path(p2):
+            continue
+        if not os.path.isfile(p2):
+            continue
+        txt = _read_file_safe(p2)
+        m = pattern.search(txt)
+        if m:
+            suspects.append({
+                "path": p2,
+                "var": m.group(1),
+                "match_excerpt": txt[max(0, m.start()-120): m.end()+120],
+            })
+
+    return {"violations": suspects, "breaking": bool(suspects)}
+
+
 def _glob_many(patterns: List[str]) -> List[str]:
     out: List[str] = []
     for pat in patterns:
@@ -1173,6 +1239,41 @@ def main() -> None:
 
         if not changed_files:
             iteration_notes.append(f"Iteración {i}: sin cambios detectados (skip)")
+            continue
+
+        # -------------------------------
+        # ENTERPRISE POLICY: Financial Test Contract (multi-stack)
+        # Prohibir expected hardcodeado "manual/derivado" en tests financieros.
+        # Si se viola, revertimos cambios y forzamos al implementador a derivar expected por fórmula/helper.
+        # -------------------------------
+        policy = detect_financial_expected_antipattern(changed_files)
+        write_out(
+            f"agent/out/iter_{i}_policy_violation_financial_tests.json",
+            json.dumps(policy, ensure_ascii=False, indent=2),
+        )
+
+        if policy.get("breaking"):
+            # Revertir cambios locales para no ensuciar la rama con commits malos
+            try:
+                subprocess.run(["git", "checkout", "--", "."], text=True, capture_output=True)
+                subprocess.run(["git", "clean", "-fd"], text=True, capture_output=True)
+            except Exception:
+                pass
+
+            msg = (
+                "POLICY VIOLATION: Tests financieros con expected hardcodeado marcado como 'manual/derivado'.\n"
+                "Regla enterprise: expected debe derivarse por fórmula estándar (helper en test) o usar un golden vector documentado.\n"
+                f"Ver evidencia: agent/out/iter_{i}_policy_violation_financial_tests.json\n"
+                "Sugerencia: en Python/pytest define una función helper expected_payment(...) con la fórmula y compara con pytest.approx.\n"
+            )
+            write_out("agent/out/last_test_output.txt", msg)
+            write_out("agent/out/failure_hints.json", json.dumps([
+                "POLICY: No hardcodear expected 'manual/derivado' en tests financieros. Deriva expected por fórmula/helper o golden vector documentado.",
+                "Python/pytest: define expected_payment(principal, annual_rate, years_or_months) usando la fórmula de amortización y usa pytest.approx.",
+                "Si cambias unidad (years↔months), NO rompas contrato: crea v2 o wrapper compatible (API LOCK).",
+            ], ensure_ascii=False, indent=2))
+
+            iteration_notes.append(f"Iteración {i}: ❌ policy violation (financial expected hardcoded) -> reverted")
             continue
 
         # --- CONTRACT SNAPSHOT + API LOCK (enterprise, stack-agnostic by heuristics) ---

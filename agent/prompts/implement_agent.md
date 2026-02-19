@@ -66,6 +66,10 @@ REGLAS CRÍTICAS
       NO lo “arregles” cambiando semántica de la función existente (API LOCK).
       Crea una función nueva (v2) o un wrapper compatible y ajusta tests/callers en la misma iteración.
 
+  7.2) ENFORCEMENT: Si en un test incluyes un expected numérico con comentario tipo
+      "cálculo manual / derivado / valores conocidos / known value", el orquestador lo RECHAZARÁ
+      (policy violation) y la iteración se revertirá. Debes derivar expected por fórmula/helper.
+
 
 8) No cambies el framework del stack solicitado.
    Respeta estructura existente.
