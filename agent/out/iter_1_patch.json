@@ -1,0 +1,15 @@
+{
+  "notes": [
+    "Se implementa la lógica de la calculadora de créditos en un nuevo módulo y se agregan pruebas unitarias."
+  ],
+  "files": {
+    "./app/calculadora.py": {
+      "operation": "modify",
+      "content": "def calcular_credito(monto, tasa_interes, plazo):\n    \"\"\"\n    Calcula la cuota mensual de un crédito.\n    :param monto: Monto total del crédito\n    :param tasa_interes: Tasa de interés anual en porcentaje\n    :param plazo: Plazo en años\n    :return: Cuota mensual\n    \"\"\"\n    tasa_mensual = (tasa_interes / 100) / 12\n    numero_cuotas = plazo * 12\n    cuota = monto * (tasa_mensual * (1 + tasa_mensual) ** numero_cuotas) / ((1 + tasa_mensual) ** numero_cuotas - 1)\n    return cuota\n\n\nif __name__ == '__main__':\n    # Ejemplo de uso\n    monto = 100000  # Monto del crédito\n    tasa_interes = 5  # Tasa de interés anual\n    plazo = 15  # Plazo en años\n    cuota = calcular_credito(monto, tasa_interes, plazo)\n    print(f'La cuota mensual es: {cuota:.2f}')"
+    },
+    "./tests/test_calculadora.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom app.calculadora import calcular_credito\n\n\ndef test_calcular_credito():\n    # Test de la función calcular_credito\n    monto = 100000\n    tasa_interes = 5\n    plazo = 15\n    cuota_esperada = calcular_credito(monto, tasa_interes, plazo)\n    # Cálculo esperado derivado de la fórmula\n    cuota_calculada = 790.79  # Cálculo manual para verificación\n    assert cuota_esperada == pytest.approx(cuota_calculada, rel=1e-2)\n\n\nif __name__ == '__main__':\n    pytest.main()"
+    }
+  }
+}
