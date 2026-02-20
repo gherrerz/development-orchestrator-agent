@@ -1,0 +1,37 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.14, pytest-8.4.2, pluggy-1.6.0
+django: version: 5.2.11, settings: config.settings (from ini)
+rootdir: /home/runner/work/development-orchestrator-agent/development-orchestrator-agent
+configfile: pytest.ini
+plugins: django-4.12.0, anyio-4.12.1
+collected 5 items
+
+tests/test_smoke.py .                                                    [ 20%]
+tests/test_calculadora.py F.                                             [ 60%]
+tests/test_finance_contract.py ..                                        [100%]
+
+=================================== FAILURES ===================================
+____________________ TestCalculadora.test_calcular_credito _____________________
+
+self = <test_calculadora.TestCalculadora object at 0x7f4925908a50>
+
+    def test_calcular_credito(self):
+        # Caso de prueba: Monto 10000, Tasa 5%, Plazo 1 año
+        cuota = calcular_credito(10000, 5, 1)
+>       assert cuota == pytest.approx(188.71, rel=1e-2)  # Cálculo derivado
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       assert 856.0748178846737 == 188.71 ± 1.8871
+E         
+E         comparison failed
+E         Obtained: 856.0748178846737
+E         Expected: 188.71 ± 1.8871
+
+tests/test_calculadora.py:9: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_calculadora.py::TestCalculadora::test_calcular_credito - assert 856.0748178846737 == 188.71 ± 1.8871
+  
+  comparison failed
+  Obtained: 856.0748178846737
+  Expected: 188.71 ± 1.8871
+========================= 1 failed, 4 passed in 0.31s ==========================
+

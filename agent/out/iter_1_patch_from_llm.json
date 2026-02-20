@@ -1,0 +1,19 @@
+{
+  "notes": [
+    "Se implementa la lógica de la calculadora de créditos y se agregan pruebas unitarias."
+  ],
+  "files": {
+    "./app/calculadora.py": {
+      "operation": "modify",
+      "content": "def calcular_credito(monto, tasa_interes, plazo):\n    \"\"\"\n    Calcula la cuota mensual de un crédito.\n    :param monto: Monto del crédito\n    :param tasa_interes: Tasa de interés anual en porcentaje\n    :param plazo: Plazo en años\n    :return: Cuota mensual\n    \"\"\"\n    tasa_mensual = tasa_interes / 100 / 12\n    numero_cuotas = plazo * 12\n    cuota = (monto * tasa_mensual) / (1 - (1 + tasa_mensual) ** -numero_cuotas)\n    return cuota\n\n\ndef calcular_total_a_pagar(cuota, plazo):\n    \"\"\"\n    Calcula el total a pagar por el crédito.\n    :param cuota: Cuota mensual\n    :param plazo: Plazo en años\n    :return: Total a pagar\n    \"\"\"\n    total = cuota * plazo * 12\n    return total\n"
+    },
+    "./tests/test_calculadora.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom app.calculadora import calcular_credito, calcular_total_a_pagar\n\n\nclass TestCalculadora:\n    def test_calcular_credito(self):\n        # Caso de prueba: Monto 10000, Tasa 5%, Plazo 1 año\n        cuota = calcular_credito(10000, 5, 1)\n        assert cuota == pytest.approx(188.71, rel=1e-2)  # Cálculo derivado\n\n    def test_calcular_total_a_pagar(self):\n        # Caso de prueba: Cuota 188.71, Plazo 1 año\n        total = calcular_total_a_pagar(188.71, 1)\n        assert total == 2264.52  # Cálculo derivado\n"
+    },
+    "./app/views.py": {
+      "operation": "modify",
+      "content": "from django.shortcuts import render\nfrom .calculadora import calcular_credito, calcular_total_a_pagar\n\n\ndef simular_credito(request):\n    if request.method == 'POST':\n        monto = float(request.POST.get('monto'))\n        tasa_interes = float(request.POST.get('tasa_interes'))\n        plazo = int(request.POST.get('plazo'))\n        cuota = calcular_credito(monto, tasa_interes, plazo)\n        total = calcular_total_a_pagar(cuota, plazo)\n        return render(request, 'resultado.html', {'cuota': cuota, 'total': total})\n    return render(request, 'simulador.html')\n"
+    }
+  }
+}
