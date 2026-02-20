@@ -1,0 +1,26 @@
+{
+  "stack_id": "java-spring-boot",
+  "language": "java",
+  "markers_any_of": [
+    "pom.xml",
+    "**/pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "**/build.gradle",
+    "**/build.gradle.kts"
+  ],
+  "markers_found": false,
+  "bootstrap_kind": "template",
+  "bootstrap_applied": true,
+  "created_files": [
+    "pom.xml",
+    "src/main/java/com/example/Application.java",
+    "src/test/java/com/example/ApplicationTests.java"
+  ],
+  "commands_run": [],
+  "notes": [
+    "Markers missing; attempting bootstrap.",
+    "Template bootstrap created_files=3"
+  ],
+  "markers_found_after": true
+}

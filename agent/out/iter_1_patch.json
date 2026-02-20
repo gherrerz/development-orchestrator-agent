@@ -1,0 +1,15 @@
+{
+  "notes": [
+    "Implementación de la lógica de la calculadora de créditos y pruebas unitarias correspondientes."
+  ],
+  "files": {
+    "src/main/java/com/example/app/CreditCalculatorService.java": {
+      "operation": "modify",
+      "content": "package com.example.app;\n\nimport org.springframework.stereotype.Service;\n\n@Service\npublic class CreditCalculatorService {\n\n    public double calculateCredit(double amount, double interestRate, int years) {\n        // Fórmula simple para calcular el crédito\n        return amount * Math.pow(1 + interestRate, years);\n    }\n}\n"
+    },
+    "src/test/java/com/example/app/CreditCalculatorServiceTest.java": {
+      "operation": "modify",
+      "content": "package com.example.app;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport org.junit.jupiter.api.Test;\n\nclass CreditCalculatorServiceTest {\n\n    private final CreditCalculatorService calculator = new CreditCalculatorService();\n\n    @Test\n    void testCalculateCredit() {\n        // Test con valores de ejemplo\n        double amount = 1000;\n        double interestRate = 0.05; // 5%\n        int years = 10;\n        double expected = 1628.894626777442; // Cálculo: 1000 * (1 + 0.05)^10\n        assertEquals(expected, calculator.calculateCredit(amount, interestRate, years), 0.01);\n    }\n}\n"
+    }
+  }
+}
