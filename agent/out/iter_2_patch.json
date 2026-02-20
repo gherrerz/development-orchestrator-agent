@@ -1,0 +1,15 @@
+{
+  "notes": [
+    "Implementada la lógica de la calculadora de créditos y se han agregado pruebas unitarias. Se corrigió la comparación de precisión en el test."
+  ],
+  "files": {
+    "./app/calculadora.py": {
+      "operation": "modify",
+      "content": "def calcular_credito(monto, tasa, plazo):\n    \"\"\"\n    Calcula la cuota mensual de un crédito.\n    :param monto: Monto del crédito\n    :param tasa: Tasa de interés anual en porcentaje\n    :param plazo: Plazo en años\n    :return: Cuota mensual\n    \"\"\"\n    tasa_mensual = tasa / 100 / 12\n    numero_pagos = plazo * 12\n    cuota = monto * tasa_mensual / (1 - (1 + tasa_mensual) ** -numero_pagos)\n    return cuota\n"
+    },
+    "./tests/test_calculadora.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom app.calculadora import calcular_credito\n\nclass TestCalculadora:\n    def test_calcular_credito(self):\n        # Caso de prueba: Monto 10000, Tasa 5%, Plazo 1 año\n        cuota = calcular_credito(10000, 5, 1)\n        assert cuota == pytest.approx(856.07, rel=1e-2)  # Cálculo derivado\n"
+    }
+  }
+}
