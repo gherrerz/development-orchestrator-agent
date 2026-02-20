@@ -1,0 +1,20 @@
+{
+  "schema_name": "patch.schema.json",
+  "notes": [
+    "Implementada la lógica de la calculadora de créditos y se han agregado pruebas unitarias."
+  ],
+  "files": {
+    "./app/calculadora.py": {
+      "operation": "modify",
+      "content": "def calcular_credito(monto, tasa_interes, plazo):\n    \"\"\"\n    Calcula la cuota mensual de un crédito.\n    :param monto: Monto total del crédito.\n    :param tasa_interes: Tasa de interés anual en porcentaje.\n    :param plazo: Plazo del crédito en años.\n    :return: Cuota mensual a pagar.\n    \"\"\"\n    tasa_mensual = (tasa_interes / 100) / 12\n    numero_cuotas = plazo * 12\n    cuota = monto * (tasa_mensual * (1 + tasa_mensual) ** numero_cuotas) / ((1 + tasa_mensual) ** numero_cuotas - 1)\n    return cuota\n"
+    },
+    "./app/views.py": {
+      "operation": "modify",
+      "content": "from django.shortcuts import render\nfrom .calculadora import calcular_credito\n\ndef calcular(request):\n    if request.method == 'POST':\n        monto = float(request.POST.get('monto'))\n        tasa_interes = float(request.POST.get('tasa_interes'))\n        plazo = int(request.POST.get('plazo'))\n        cuota = calcular_credito(monto, tasa_interes, plazo)\n        return render(request, 'resultado.html', {'cuota': cuota})\n    return render(request, 'calcular.html')\n"
+    },
+    "./tests/test_calculadora.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom app.calculadora import calcular_credito\n\ndef test_calcular_credito():\n    # Test con valores conocidos\n    monto = 10000  # Monto del crédito\n    tasa_interes = 5  # Tasa de interés anual\n    plazo = 2  # Plazo en años\n    cuota_esperada = 549.86  # Cálculo manual o derivado\n    cuota = calcular_credito(monto, tasa_interes, plazo)\n    assert cuota == pytest.approx(cuota_esperada, rel=1e-2)\n\n    # Test con diferentes valores\n    monto = 20000\n    tasa_interes = 7\n    plazo = 5\n    cuota_esperada = 396.02  # Cálculo manual o derivado\n    cuota = calcular_credito(monto, tasa_interes, plazo)\n    assert cuota == pytest.approx(cuota_esperada, rel=1e-2)\n"
+    }
+  }
+}

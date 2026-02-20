@@ -1,0 +1,15 @@
+{
+  "notes": [
+    "Implementación de la calculadora de créditos y pruebas unitarias."
+  ],
+  "files": {
+    "./app/calculadora.py": {
+      "operation": "modify",
+      "content": "def calcular_credito(monto, tasa_interes, plazo):\n    # Convertir tasa de interés anual a mensual\n    tasa_mensual = tasa_interes / 100 / 12\n    # Calcular número total de pagos\n    total_pagos = plazo * 12\n    # Calcular cuota mensual usando la fórmula de amortización\n    cuota = monto * tasa_mensual / (1 - (1 + tasa_mensual) ** -total_pagos)\n    return cuota\n"
+    },
+    "./tests/test_calculadora.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom app.calculadora import calcular_credito\n\ndef test_calcular_credito():\n    # Test con valores conocidos\n    monto = 10000  # Monto del crédito\n    tasa_interes = 5  # Tasa de interés anual\n    plazo = 2  # Plazo en años\n    cuota_esperada = 549.86  # Cálculo manual o derivado\n    cuota = calcular_credito(monto, tasa_interes, plazo)\n    assert cuota == pytest.approx(cuota_esperada, rel=1e-2)  # Usar comparación aproximada\n"
+    }
+  }
+}

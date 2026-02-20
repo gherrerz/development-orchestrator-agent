@@ -1,0 +1,13 @@
+ M agent/out/contract_snapshot.json
+ M agent/out/last_test_output.txt
+ M app/__pycache__/calculadora.cpython-311.pyc
+ M app/calculadora.py
+ M tests/__pycache__/test_calculadora.cpython-311-pytest-8.4.2.pyc
+?? agent/out/iter_2_test_output.txt
+?? agent/out/iter_2_test_telemetry.json
+?? agent/out/iter_3_changed_files.txt
+?? agent/out/iter_3_contract_snapshot.json
+?? agent/out/iter_3_contract_violations.json
+?? agent/out/iter_3_patch.json
+?? agent/out/iter_3_patch_from_llm.json
+
