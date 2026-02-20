@@ -1,0 +1,14 @@
+ M agent/out/contract_snapshot.json
+ M agent/out/last_test_output.txt
+ M app/forms.py
+ M app/templates/calculator.html
+ M app/tests/__pycache__/test_calculator.cpython-311-pytest-9.0.2.pyc
+ M app/tests/test_calculator.py
+ M app/views.py
+?? agent/out/iter_4_test_output.txt
+?? agent/out/iter_5_changed_files.txt
+?? agent/out/iter_5_contract_snapshot.json
+?? agent/out/iter_5_contract_violations.json
+?? agent/out/iter_5_patch.json
+?? agent/out/iter_5_patch_from_llm.json
+

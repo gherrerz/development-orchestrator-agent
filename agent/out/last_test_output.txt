@@ -1,0 +1,17 @@
+
+==================================== ERRORS ====================================
+________________ ERROR collecting app/tests/test_calculator.py _________________
+ImportError while importing test module '/home/runner/work/development-orchestrator-agent/development-orchestrator-agent/app/tests/test_calculator.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/opt/hostedtoolcache/Python/3.11.14/x64/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app/tests/test_calculator.py:3: in <module>
+    from .forms import CreditCalculatorForm
+E   ImportError: attempted relative import with no known parent package
+=========================== short test summary info ============================
+ERROR app/tests/test_calculator.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.18s
+
