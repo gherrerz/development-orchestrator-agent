@@ -1,0 +1,6 @@
+[
+  "Posible mismatch de precisión (float). Evita comparaciones exactas.",
+  "Pytest: usa pytest.approx(expected, abs=0.01) o rel=1e-3.",
+  "Finanzas: considera Decimal/centavos para evitar drift.",
+  "Dominio financiero: considera Decimal/centavos (integers) para evitar drift de float."
+]

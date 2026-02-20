@@ -1,0 +1,19 @@
+{
+  "notes": [
+    "Se implementa la lógica de la calculadora de créditos en calculator.py y se agregan pruebas unitarias en test_calculator.py."
+  ],
+  "files": {
+    "./app/calculator.py": {
+      "operation": "modify",
+      "content": "class CreditCalculator:\n    def __init__(self, principal, rate, time):\n        self.principal = principal\n        self.rate = rate\n        self.time = time\n\n    def calculate_total_payment(self):\n        return self.principal * (1 + self.rate * self.time)\n\n    def calculate_monthly_payment(self):\n        total_payment = self.calculate_total_payment()\n        return total_payment / (self.time * 12)\n\n    def calculate_interest(self):\n        return self.calculate_total_payment() - self.principal\n"
+    },
+    "./tests/test_calculator.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom app.calculator import CreditCalculator\n\nclass TestCreditCalculator:\n    def test_calculate_total_payment(self):\n        calculator = CreditCalculator(1000, 0.05, 2)\n        assert calculator.calculate_total_payment() == 1100.0  # 1000 * (1 + 0.05 * 2)\n\n    def test_calculate_monthly_payment(self):\n        calculator = CreditCalculator(1000, 0.05, 2)\n        assert calculator.calculate_monthly_payment() == pytest.approx(45.8333, rel=1e-5)  # 1100 / 24\n\n    def test_calculate_interest(self):\n        calculator = CreditCalculator(1000, 0.05, 2)\n        assert calculator.calculate_interest() == 100.0  # 1100 - 1000\n"
+    },
+    "./app/views.py": {
+      "operation": "modify",
+      "content": "from django.shortcuts import render\nfrom .calculator import CreditCalculator\n\n\ndef calculate_credit(request):\n    if request.method == 'POST':\n        principal = float(request.POST.get('principal'))\n        rate = float(request.POST.get('rate'))\n        time = float(request.POST.get('time'))\n        calculator = CreditCalculator(principal, rate, time)\n        total_payment = calculator.calculate_total_payment()\n        monthly_payment = calculator.calculate_monthly_payment()\n        interest = calculator.calculate_interest()\n        return render(request, 'result.html', {'total_payment': total_payment, 'monthly_payment': monthly_payment, 'interest': interest})\n    return render(request, 'calculator.html')\n"
+    }
+  }
+}

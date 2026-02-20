@@ -1,0 +1,15 @@
+{
+  "notes": [
+    "Implementación de la calculadora de créditos y pruebas unitarias."
+  ],
+  "files": {
+    "./app/calculator.py": {
+      "operation": "modify",
+      "content": "def calcular_credito(monto, tasa_interes, plazo):\n    # Cálculo del crédito\n    tasa_mensual = tasa_interes / 100 / 12\n    plazo_meses = plazo * 12\n    cuota = (monto * tasa_mensual) / (1 - (1 + tasa_mensual) ** -plazo_meses)\n    return round(cuota, 2)\n\n"
+    },
+    "./tests/test_calculator.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom app.calculator import calcular_credito\n\ndef test_calcular_credito():\n    # Caso de prueba: monto=10000, tasa_interes=5, plazo=2\n    resultado = calcular_credito(10000, 5, 2)\n    esperado = 549.86  # Cálculo: (10000 * (5/100/12)) / (1 - (1 + (5/100/12)) ** -(2*12))\n    assert resultado == pytest.approx(esperado, rel=1e-2)\n\n"
+    }
+  }
+}

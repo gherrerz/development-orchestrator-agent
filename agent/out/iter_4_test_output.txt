@@ -1,0 +1,23 @@
+.F                                                                       [100%]
+=================================== FAILURES ===================================
+____________________________ test_calcular_credito _____________________________
+
+    def test_calcular_credito():
+        # Caso de prueba: monto=10000, tasa_interes=5, plazo=2
+        resultado = calcular_credito(10000, 5, 2)
+        esperado = 549.86  # Cálculo: (10000 * (5/100/12)) / (1 - (1 + (5/100/12)) ** -(2*12))
+>       assert resultado == pytest.approx(esperado, rel=1e-2)
+E       assert 438.71 == 549.86 ± 5.4986
+E         
+E         comparison failed
+E         Obtained: 438.71
+E         Expected: 549.86 ± 5.4986
+
+tests/test_calculator.py:9: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_calculator.py::test_calcular_credito - assert 438.71 == 549.86 ± 5.4986
+  
+  comparison failed
+  Obtained: 438.71
+  Expected: 549.86 ± 5.4986
+

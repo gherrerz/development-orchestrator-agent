@@ -1,0 +1,15 @@
+{
+  "notes": [
+    "Se implementa la lógica de la calculadora de créditos en calculator.py y se agregan pruebas unitarias en test_calculator.py."
+  ],
+  "files": {
+    "./app/calculator.py": {
+      "operation": "modify",
+      "content": "class CreditCalculator:\n    def __init__(self, principal, rate, time):\n        self.principal = principal\n        self.rate = rate\n        self.time = time\n\n    def calculate_interest(self):\n        # Cálculo del interés simple\n        return self.principal * (self.rate / 100) * self.time\n\n    def calculate_total_payment(self):\n        # Cálculo del pago total\n        interest = self.calculate_interest()\n        return self.principal + interest\n"
+    },
+    "./tests/test_calculator.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom app.calculator import CreditCalculator\n\nclass TestCreditCalculator:\n    def test_calculate_interest(self):\n        calculator = CreditCalculator(1000, 5, 2)\n        assert calculator.calculate_interest() == 100.0  # 1000 * 0.05 * 2\n\n    def test_calculate_total_payment(self):\n        calculator = CreditCalculator(1000, 5, 2)\n        assert calculator.calculate_total_payment() == 1100.0  # 1000 + 100\n"
+    }
+  }
+}
