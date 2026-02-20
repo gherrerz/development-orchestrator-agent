@@ -1,0 +1,32 @@
+{
+  "stack_id": "python-django",
+  "language": "python",
+  "markers_any_of": [
+    "manage.py",
+    "pyproject.toml",
+    "requirements.txt",
+    "config/settings.py",
+    "*/settings.py"
+  ],
+  "markers_found": false,
+  "bootstrap_kind": "template",
+  "bootstrap_applied": true,
+  "created_files": [
+    "requirements.txt",
+    "manage.py",
+    "config/__init__.py",
+    "config/settings.py",
+    "config/urls.py",
+    "config/wsgi.py",
+    "config/asgi.py",
+    "pytest.ini",
+    "tests/test_smoke.py",
+    "tests/test_finance_contract.py"
+  ],
+  "commands_run": [],
+  "notes": [
+    "Markers missing; attempting bootstrap.",
+    "Template bootstrap created_files=10"
+  ],
+  "markers_found_after": true
+}
