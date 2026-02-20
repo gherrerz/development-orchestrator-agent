@@ -1,0 +1,1 @@
+Se ha corregido el error de indentación en 'test_calculator.py' y se ha implementado la función 'calcular_credito' en 'calculator.py'.

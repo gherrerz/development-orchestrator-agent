@@ -1,0 +1,1 @@
+Se ha corregido el error de indentación en 'test_calculator.py' y se ha ajustado la comparación del segundo test para evitar errores de precisión en los cálculos.
