@@ -1,11 +1,23 @@
 {
   "notes": [
-    "Se implementa la lógica de la calculadora de créditos en 'calculadora.py' y se agregan pruebas unitarias en 'test_calculadora.py'."
+    "Se implementa el modelo y la vista para consultar créditos vigentes, así como pruebas unitarias para asegurar su correcto funcionamiento."
   ],
   "files": {
-    "./app/calculadora.py": {
+    "./app/models.py": {
       "operation": "modify",
-      "content": "def calcular_cuota(principal, tasa_interes, plazo):\n    \"\"\"\n    Calcula la cuota mensual de un préstamo.\n    :param principal: Monto del préstamo\n    :param tasa_interes: Tasa de interés anual en porcentaje\n    :param plazo: Plazo en años\n    :return: Cuota mensual\n    \"\"\"\n    tasa_mensual = tasa_interes / 100 / 12\n    meses = plazo * 12\n    cuota = principal * tasa_mensual / (1 - (1 + tasa_mensual) ** -meses)\n    return cuota\n\n\ndef calcular_total_a_pagar(principal, tasa_interes, plazo):\n    \"\"\"\n    Calcula el total a pagar de un préstamo.\n    :param principal: Monto del préstamo\n    :param tasa_interes: Tasa de interés anual en porcentaje\n    :param plazo: Plazo en años\n    :return: Total a pagar\n    \"\"\"\n    cuota = calcular_cuota(principal, tasa_interes, plazo)\n    total = cuota * plazo * 12\n    return total\n"
+      "content": "from django.db import models\n\nclass Credito(models.Model):\n    monto = models.DecimalField(max_digits=10, decimal_places=2)\n    tasa_interes = models.DecimalField(max_digits=5, decimal_places=2)\n    plazo_meses = models.IntegerField()\n    fecha_creacion = models.DateTimeField(auto_now_add=True)\n\n    def __str__(self):\n        return f'Credito {self.id}: {self.monto} a {self.tasa_interes}% por {self.plazo_meses} meses'\n"
+    },
+    "./app/views.py": {
+      "operation": "modify",
+      "content": "from rest_framework import viewsets\nfrom .models import Credito\nfrom .serializers import CreditoSerializer\n\nclass CreditoViewSet(viewsets.ModelViewSet):\n    queryset = Credito.objects.all()\n    serializer_class = CreditoSerializer\n"
+    },
+    "./app/urls.py": {
+      "operation": "modify",
+      "content": "from django.urls import path, include\nfrom rest_framework.routers import DefaultRouter\nfrom .views import CreditoViewSet\n\nrouter = DefaultRouter()\nrouter.register(r'creditos', CreditoViewSet)\n\nurlpatterns = [\n    path('', include(router.urls)),\n]\n"
+    },
+    "./tests/test_creditos.py": {
+      "operation": "modify",
+      "content": "from django.test import TestCase\nfrom .models import Credito\n\nclass CreditoModelTest(TestCase):\n    def setUp(self):\n        Credito.objects.create(monto=10000.00, tasa_interes=5.0, plazo_meses=24)\n\n    def test_credito_str(self):\n        credito = Credito.objects.get(id=1)\n        self.assertEqual(str(credito), 'Credito 1: 10000.00 a 5.0% por 24 meses')\n"
     }
   }
 }

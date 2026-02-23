@@ -1,6 +1,4 @@
-app/
-config/
-manage.py
-pytest.ini
-requirements.txt
-tests/
+app/models.py
+app/urls.py
+app/views.py
+tests/test_creditos.py
