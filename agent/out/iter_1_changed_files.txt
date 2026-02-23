@@ -1,0 +1,6 @@
+app/
+config/
+manage.py
+pytest.ini
+requirements.txt
+tests/
