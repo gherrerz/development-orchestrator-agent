@@ -1,0 +1,12 @@
+?? agent/__pycache__/
+?? agent/out/
+?? agent/stacks/__pycache__/
+?? agent/stacks/plugins/__pycache__/
+?? agent/tools/__pycache__/
+?? app/
+?? config/
+?? manage.py
+?? pytest.ini
+?? requirements.txt
+?? tests/
+
