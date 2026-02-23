@@ -1,0 +1,4 @@
+./README.md
+./agent/requirements.txt
+./pytest.ini
+./requirements.txt

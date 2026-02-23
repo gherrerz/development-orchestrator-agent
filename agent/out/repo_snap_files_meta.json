@@ -1,0 +1,10 @@
+{
+  "total_matched": 4,
+  "used_in_snapshot": 4,
+  "files": [
+    "./README.md",
+    "./agent/requirements.txt",
+    "./pytest.ini",
+    "./requirements.txt"
+  ]
+}
