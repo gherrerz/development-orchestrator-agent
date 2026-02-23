@@ -5,7 +5,7 @@ from rest_framework.test import APIClient
 from .models import Credito
 
 @pytest.mark.django_db
-class TestCreditoAPI:
+class TestCredito:
     def setup_method(self):
         self.client = APIClient()
 
@@ -13,7 +13,9 @@ class TestCreditoAPI:
         response = self.client.post(reverse('credito-list'), {
             'monto': 10000.00,
             'tasa_interes': 5.0,
-            'plazo_meses': 12
+            'plazo_meses': 12,
+            'fecha_inicio': '2023-01-01',
+            'fecha_fin': '2024-01-01'
         })
         assert response.status_code == status.HTTP_201_CREATED
         assert Credito.objects.count() == 1

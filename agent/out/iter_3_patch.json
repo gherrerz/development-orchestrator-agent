@@ -1,0 +1,23 @@
+{
+  "notes": [
+    "Implementación del modelo y vista para créditos vigentes, además de pruebas unitarias."
+  ],
+  "files": {
+    "./app/models.py": {
+      "operation": "modify",
+      "content": "from django.db import models\n\nclass Credito(models.Model):\n    monto = models.DecimalField(max_digits=10, decimal_places=2)\n    tasa_interes = models.DecimalField(max_digits=5, decimal_places=2)\n    plazo_meses = models.IntegerField()\n    fecha_inicio = models.DateField()\n    fecha_fin = models.DateField()\n\n    def __str__(self):\n        return f'Credito de {self.monto} con tasa {self.tasa_interes}%'"
+    },
+    "./app/views.py": {
+      "operation": "modify",
+      "content": "from rest_framework import viewsets\nfrom .models import Credito\nfrom .serializers import CreditoSerializer\n\nclass CreditoViewSet(viewsets.ModelViewSet):\n    queryset = Credito.objects.all()\n    serializer_class = CreditoSerializer"
+    },
+    "./app/urls.py": {
+      "operation": "modify",
+      "content": "from django.urls import path, include\nfrom rest_framework.routers import DefaultRouter\nfrom .views import CreditoViewSet\n\nrouter = DefaultRouter()\nrouter.register(r'creditos', CreditoViewSet)\n\nurlpatterns = [\n    path('', include(router.urls)),\n]"
+    },
+    "./tests/test_creditos.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom django.urls import reverse\nfrom rest_framework import status\nfrom rest_framework.test import APIClient\nfrom .models import Credito\n\n@pytest.mark.django_db\nclass TestCredito:\n    def setup_method(self):\n        self.client = APIClient()\n\n    def test_crear_credito(self):\n        response = self.client.post(reverse('credito-list'), {\n            'monto': 10000.00,\n            'tasa_interes': 5.0,\n            'plazo_meses': 12,\n            'fecha_inicio': '2023-01-01',\n            'fecha_fin': '2024-01-01'\n        })\n        assert response.status_code == status.HTTP_201_CREATED\n        assert Credito.objects.count() == 1\n        assert Credito.objects.get().monto == 10000.00\n"
+    }
+  }
+}
