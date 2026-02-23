@@ -1,0 +1,15 @@
+{
+  "notes": [
+    "Implementada la lógica de la calculadora de créditos en app/calculadora.py y se han agregado pruebas unitarias en tests/test_calculadora.py."
+  ],
+  "files": {
+    "./app/calculadora.py": {
+      "operation": "modify",
+      "content": "def calcular_credito(principal: float, annual_rate_pct: float, years: int) -> float:\n    \"\"\"\n    Calcula la cuota mensual de un préstamo basado en el monto principal, la tasa de interés anual y el plazo en años.\n    :param principal: Monto del préstamo\n    :param annual_rate_pct: Tasa de interés anual en porcentaje\n    :param years: Plazo del préstamo en años\n    :return: Cuota mensual a pagar\n    \"\"\"\n    monthly_rate = (annual_rate_pct / 100) / 12\n    months = years * 12\n    cuota = principal * (monthly_rate * (1 + monthly_rate) ** months) / ((1 + monthly_rate) ** months - 1)\n    return cuota\n\n"
+    },
+    "./tests/test_calculadora.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom app.calculadora import calcular_credito\n\nclass TestCalculadora:\n    def test_calcular_credito(self):\n        # Test con valores conocidos\n        principal = 10000.0\n        annual_rate_pct = 5.0\n        years = 2\n        expected_cuota = calcular_credito(principal, annual_rate_pct, years)\n        assert expected_cuota > 0, \"La cuota debe ser mayor que 0\"\n\n    def test_invariants(self):\n        # Invariantes\n        p, r = 10000.0, 5.0\n        cuota_1y = calcular_credito(p, r, 1)\n        cuota_2y = calcular_credito(p, r, 2)\n        assert cuota_1y > cuota_2y, \"La cuota a 1 año debe ser mayor que a 2 años\"\n"
+    }
+  }
+}

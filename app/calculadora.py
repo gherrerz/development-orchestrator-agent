@@ -1,25 +1,13 @@
-def calcular_cuota(principal, tasa_interes, plazo):
+def calcular_credito(principal: float, annual_rate_pct: float, years: int) -> float:
     """
-    Calcula la cuota mensual de un préstamo.
+    Calcula la cuota mensual de un préstamo basado en el monto principal, la tasa de interés anual y el plazo en años.
     :param principal: Monto del préstamo
-    :param tasa_interes: Tasa de interés anual en porcentaje
-    :param plazo: Plazo en años
-    :return: Cuota mensual
+    :param annual_rate_pct: Tasa de interés anual en porcentaje
+    :param years: Plazo del préstamo en años
+    :return: Cuota mensual a pagar
     """
-    tasa_mensual = tasa_interes / 100 / 12
-    meses = plazo * 12
-    cuota = principal * tasa_mensual / (1 - (1 + tasa_mensual) ** -meses)
+    monthly_rate = (annual_rate_pct / 100) / 12
+    months = years * 12
+    cuota = principal * (monthly_rate * (1 + monthly_rate) ** months) / ((1 + monthly_rate) ** months - 1)
     return cuota
 
-
-def calcular_total_a_pagar(principal, tasa_interes, plazo):
-    """
-    Calcula el total a pagar de un préstamo.
-    :param principal: Monto del préstamo
-    :param tasa_interes: Tasa de interés anual en porcentaje
-    :param plazo: Plazo en años
-    :return: Total a pagar
-    """
-    cuota = calcular_cuota(principal, tasa_interes, plazo)
-    total = cuota * plazo * 12
-    return total
