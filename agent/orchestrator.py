@@ -1149,6 +1149,19 @@ def main() -> None:
     key_candidates = list(dict.fromkeys(key_candidates))[:60]
     repo_snap = snapshot(key_candidates)
 
+        # ✅ deja evidencia en agent/out
+    write_out(
+        "agent/out/repo_snap_files.txt",
+        "\n".join(key_candidates_snap) if key_candidates_snap else "(no key candidates matched)"
+    )
+    write_out(
+        "agent/out/repo_snap_files_meta.json",
+        json.dumps(
+            {"total_matched": len(key_candidates), "used_in_snapshot": len(key_candidates_snap), "files": key_candidates_snap},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     planner_prompt = _load_prompt("design_agent.md")
     impl_prompt = _load_prompt("implement_agent.md")
     test_prompt = _load_prompt("test_agent.md")
