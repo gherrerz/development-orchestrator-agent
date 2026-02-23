@@ -347,20 +347,25 @@ def detect_financial_expected_antipattern(changed_files: List[str]) -> Dict[str,
     Policy (enterprise): en tests financieros NO se permite hardcodear expected "manual/derivado"
     si no es un golden vector documentado o expected derivado por fórmula/helper.
 
-    Heurística simple y efectiva (multi-stack):
-    - Solo mira archivos de test cambiados.
-    - Busca variables típicas expected + literal numérico + marcador humano ("manual", "derivado", "known", "valores conocidos").
+    Esta heurística es multi-stack:
+    - solo analiza archivos de test tocados en la iteración
+    - detecta:
+      (a) asignación expected = 123.45 con comentario "manual/derivado/known"
+      (b) asserts con literal numérico + comentario "manual/derivado/known"
     """
-    markers = [
+    # Marcadores humanos (ES/EN)
+    marker_words = [
         r"c[aá]lculo\s+manual",
         r"derivad[oa]",
         r"valores?\s+conocid[oa]s",
         r"known\s+value",
         r"hand\s*calc",
         r"manual\s+calc",
+        r"calculated\s+manually",
     ]
+    marker = r"(?:%s)" % "|".join(marker_words)
 
-    # variables expected típicas para finanzas/amortización
+    # variables expected típicas
     expected_vars = [
         r"cuota_esperada",
         r"pago_esperado",
@@ -370,15 +375,35 @@ def detect_financial_expected_antipattern(changed_files: List[str]) -> Dict[str,
         r"expected",
     ]
 
-    # asignación con número (int/float) en varios lenguajes
-    assign_number = r"(?:=|:)\s*\d+(?:\.\d+)?"
+    # número literal
+    num = r"\d+(?:\.\d+)?"
 
-    # comentario (py/js/java/c#) con marker humano
-    comment_with_marker = r"(?:#|//|/\*)\s*(?:" + "|".join(markers) + r")"
+    # comentario con marker
+    comment = r"(?:#|//|/\*)\s*(?:" + marker + r")"
 
-    # patrón combinado: var expected + = número + comentario marker
-    pattern = re.compile(
-        r"(?is)\b(" + "|".join(expected_vars) + r")\b\s*" + assign_number + r".{0,80}?" + comment_with_marker
+    # (a) asignación expected = 123.45 ... comment(marker)
+    pat_assign = re.compile(
+        r"(?is)\b(" + "|".join(expected_vars) + r")\b\s*(?:=|:)\s*" + num + r".{0,120}?" + comment
+    )
+
+    # (b1) JUnit/Java: assertEquals(123.45, something, tol) // marker
+    pat_junit = re.compile(
+        r"(?is)\bassert(?:Equals|That)\s*\(\s*" + num + r"\s*,.{0,200}?\)\s*(?:" + comment + r")"
+    )
+
+    # (b2) Python/pytest: pytest.approx(123.45) # marker
+    pat_pytest = re.compile(
+        r"(?is)\bpytest\.approx\s*\(\s*" + num + r"(?:\s*,[^)]*)?\)\s*(?:" + comment + r")"
+    )
+
+    # (b3) JS: toBeCloseTo(123.45) // marker  OR closeTo(123.45)
+    pat_js = re.compile(
+        r"(?is)\b(?:toBeCloseTo|closeTo)\s*\(\s*" + num + r"(?:\s*,[^)]*)?\)\s*(?:" + comment + r")"
+    )
+
+    # (b4) Genérico: cualquier literal numérico seguido de comment(marker) en la misma línea
+    pat_line_literal = re.compile(
+        r"(?im)^(?P<line>.{0,400}?\b" + num + r"\b.{0,120}?" + comment + r".*)$"
     )
 
     suspects: List[Dict[str, Any]] = []
@@ -388,14 +413,33 @@ def detect_financial_expected_antipattern(changed_files: List[str]) -> Dict[str,
             continue
         if not os.path.isfile(p2):
             continue
+
         txt = _read_file_safe(p2)
-        m = pattern.search(txt)
-        if m:
-            suspects.append({
-                "path": p2,
-                "var": m.group(1),
-                "match_excerpt": txt[max(0, m.start()-120): m.end()+120],
-            })
+        m = (
+            pat_assign.search(txt)
+            or pat_junit.search(txt)
+            or pat_pytest.search(txt)
+            or pat_js.search(txt)
+        )
+
+        # fallback: línea con literal + marker
+        if not m:
+            m2 = pat_line_literal.search(txt)
+            if m2:
+                suspects.append({
+                    "path": p2,
+                    "rule": "literal+marker-line",
+                    "match_excerpt": m2.group("line")[:500],
+                })
+            continue
+
+        start = max(0, m.start() - 160)
+        end = min(len(txt), m.end() + 160)
+        suspects.append({
+            "path": p2,
+            "rule": "assign/assert-with-marker",
+            "match_excerpt": txt[start:end],
+        })
 
     return {"violations": suspects, "breaking": bool(suspects)}
 

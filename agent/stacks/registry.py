@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml  # PyYAML
 
 from agent.stacks.spec import StackSpec, ToolchainSpec, CommandSpec, DependencySpec
+from agent.stacks.catalog_utils import catalog_stacks_view, auto_detect_stack_id
 from agent.stacks.plugins.base import StackPlugin
 from agent.stacks.plugins.python_plugin import PythonPlugin
 from agent.stacks.plugins.node_plugin import NodePlugin
@@ -51,13 +52,20 @@ def resolve_stack_spec(
 ) -> StackSpec:
     """Resolve a StackSpec from run request + catalog + repo detection."""
     catalog = catalog if catalog is not None else load_catalog()
+    stacks = catalog_stacks_view(catalog)
 
     stack_id = (run_req.get("stack") or "").strip()
     req_lang = (run_req.get("language") or "").strip().lower()
     req_test = (run_req.get("test_command") or "").strip()
 
+    # Auto stack detection (by repo markers) when stack is empty or "auto".
+    if not stack_id or stack_id.strip().lower() == "auto":
+        detected_stack = auto_detect_stack_id(catalog, repo_root=repo_root, preferred_language=req_lang)
+        if detected_stack:
+            stack_id = detected_stack
+
     # Start with catalog entry if present.
-    c = catalog.get(stack_id, {}) if stack_id else {}
+    c = stacks.get(stack_id, {}) if stack_id and isinstance(stacks, dict) else {}
     c_lang = (c.get("language") or "").strip().lower()
 
     # Detect if not given.
