@@ -1,12 +1,36 @@
-?? agent/__pycache__/
-?? agent/out/
-?? agent/stacks/__pycache__/
-?? agent/stacks/plugins/__pycache__/
-?? agent/tools/__pycache__/
-?? app/
-?? config/
-?? manage.py
-?? pytest.ini
-?? requirements.txt
-?? tests/
+ M agent/__pycache__/__init__.cpython-311.pyc
+ M agent/__pycache__/orchestrator.cpython-311.pyc
+ M agent/out/branch.txt
+ M agent/out/contract_snapshot.json
+ M agent/out/iter_1_changed_files.txt
+ M agent/out/iter_1_contract_snapshot.json
+ M agent/out/iter_1_patch.json
+ M agent/out/iter_1_patch_from_llm.json
+ M agent/out/preflight.json
+ M agent/stacks/__pycache__/__init__.cpython-311.pyc
+ M agent/stacks/__pycache__/catalog_utils.cpython-311.pyc
+ M agent/stacks/__pycache__/registry.cpython-311.pyc
+ M agent/stacks/__pycache__/spec.cpython-311.pyc
+ M agent/stacks/plugins/__pycache__/__init__.cpython-311.pyc
+ M agent/stacks/plugins/__pycache__/base.cpython-311.pyc
+ M agent/stacks/plugins/__pycache__/dotnet_plugin.cpython-311.pyc
+ M agent/stacks/plugins/__pycache__/generic_plugin.cpython-311.pyc
+ M agent/stacks/plugins/__pycache__/go_plugin.cpython-311.pyc
+ M agent/stacks/plugins/__pycache__/java_plugin.cpython-311.pyc
+ M agent/stacks/plugins/__pycache__/node_plugin.cpython-311.pyc
+ M agent/stacks/plugins/__pycache__/python_plugin.cpython-311.pyc
+ M agent/tools/__pycache__/__init__.cpython-311.pyc
+ M agent/tools/__pycache__/extract_request.cpython-311.pyc
+ M agent/tools/__pycache__/failure_hints.cpython-311.pyc
+ M agent/tools/__pycache__/github_tools.cpython-311.pyc
+ M agent/tools/__pycache__/llm.cpython-311.pyc
+ M agent/tools/__pycache__/patch_apply.cpython-311.pyc
+ M agent/tools/__pycache__/pinecone_memory.cpython-311.pyc
+ M agent/tools/__pycache__/repo_introspect.cpython-311.pyc
+ M agent/tools/__pycache__/stack_setup.cpython-311.pyc
+?? agent/out/iter_1_contract_violations.json
+?? app/models.py
+?? app/urls.py
+?? app/views.py
+?? tests/test_creditos.py
 

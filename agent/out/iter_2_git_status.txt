@@ -1,17 +1,17 @@
  M agent/out/contract_snapshot.json
- M app/calculadora.py
-?? agent/out/failure_hints.json
-?? agent/out/iter_1_test_output.txt
-?? agent/out/iter_1_test_telemetry.json
-?? agent/out/iter_2_changed_files.txt
-?? agent/out/iter_2_contract_snapshot.json
-?? agent/out/iter_2_contract_violations.json
-?? agent/out/iter_2_patch.json
-?? agent/out/iter_2_patch_from_llm.json
-?? agent/out/iter_2_policy_violation_financial_tests.json
-?? agent/out/last_test_output.txt
-?? app/__pycache__/
-?? config/__pycache__/
-?? tests/__pycache__/
-?? tests/test_calculadora.py
+ M agent/out/iter_1_test_output.txt
+ M agent/out/iter_1_test_telemetry.json
+ M agent/out/iter_2_changed_files.txt
+ M agent/out/iter_2_contract_snapshot.json
+ M agent/out/iter_2_patch.json
+ M agent/out/iter_2_patch_from_llm.json
+ M agent/out/last_test_output.txt
+ M app/__pycache__/calculadora.cpython-311.pyc
+ M config/__pycache__/__init__.cpython-311.pyc
+ M config/__pycache__/settings.cpython-311.pyc
+ M tests/__pycache__/test_finance_contract.cpython-311-pytest-8.4.2.pyc
+ M tests/__pycache__/test_smoke.cpython-311-pytest-8.4.2.pyc
+ M tests/test_creditos.py
+?? tests/__pycache__/test_calculadora.cpython-311-pytest-8.4.2.pyc
+?? tests/__pycache__/test_creditos.cpython-311-pytest-8.4.2.pyc
 

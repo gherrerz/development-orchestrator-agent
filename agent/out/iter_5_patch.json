@@ -1,0 +1,23 @@
+{
+  "notes": [
+    "Implementación del modelo y vista para créditos vigentes, así como pruebas unitarias correspondientes."
+  ],
+  "files": {
+    "./app/models.py": {
+      "operation": "modify",
+      "content": "from django.db import models\n\nclass Credito(models.Model):\n    monto = models.DecimalField(max_digits=10, decimal_places=2)\n    tasa_interes = models.DecimalField(max_digits=5, decimal_places=2)\n    plazo_meses = models.IntegerField()\n    fecha_creacion = models.DateField(auto_now_add=True)\n\n    def __str__(self):\n        return f'Credito {self.id}: {self.monto} a {self.tasa_interes}% por {self.plazo_meses} meses'\n"
+    },
+    "./app/views.py": {
+      "operation": "modify",
+      "content": "from rest_framework import viewsets\nfrom .models import Credito\nfrom .serializers import CreditoSerializer\n\nclass CreditoViewSet(viewsets.ModelViewSet):\n    queryset = Credito.objects.all()\n    serializer_class = CreditoSerializer\n"
+    },
+    "./app/urls.py": {
+      "operation": "modify",
+      "content": "from django.urls import path, include\nfrom rest_framework.routers import DefaultRouter\nfrom .views import CreditoViewSet\n\nrouter = DefaultRouter()\nrouter.register(r'creditos', CreditoViewSet)\n\nurlpatterns = [\n    path('', include(router.urls)),\n]\n"
+    },
+    "./tests/test_creditos.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom app.models import Credito\nfrom rest_framework.test import APIClient\nfrom django.urls import reverse\n\n@pytest.mark.django_db\nclass TestCredito:\n    def setup_method(self):\n        self.client = APIClient()\n\n    def test_crear_credito(self):\n        response = self.client.post(reverse('credito-list'), {\n            'monto': 10000.00,\n            'tasa_interes': 5.0,\n            'plazo_meses': 12\n        })\n        assert response.status_code == 201\n        assert Credito.objects.count() == 1\n        assert Credito.objects.get().monto == 10000.00\n"
+    }
+  }
+}
