@@ -1,10 +1,20 @@
-from django.test import TestCase
+import pytest
+from django.urls import reverse
+from rest_framework import status
+from rest_framework.test import APIClient
 from .models import Credito
 
-class CreditoModelTest(TestCase):
-    def setUp(self):
-        Credito.objects.create(monto=10000.00, tasa_interes=5.0, plazo_meses=24)
+@pytest.mark.django_db
+class TestCreditoAPI:
+    def setup_method(self):
+        self.client = APIClient()
 
-    def test_credito_str(self):
-        credito = Credito.objects.get(id=1)
-        self.assertEqual(str(credito), 'Credito 1: 10000.00 a 5.0% por 24 meses')
+    def test_crear_credito(self):
+        response = self.client.post(reverse('credito-list'), {
+            'monto': 10000.00,
+            'tasa_interes': 5.0,
+            'plazo_meses': 12
+        })
+        assert response.status_code == status.HTTP_201_CREATED
+        assert Credito.objects.count() == 1
+        assert Credito.objects.get().monto == 10000.00

@@ -1,15 +1,23 @@
 {
   "notes": [
-    "Implementada la lógica de la calculadora de créditos en app/calculadora.py y se han agregado pruebas unitarias en tests/test_calculadora.py."
+    "Implementación del modelo y vista para créditos vigentes, así como pruebas unitarias para asegurar su funcionalidad."
   ],
   "files": {
-    "./app/calculadora.py": {
+    "./app/models.py": {
       "operation": "modify",
-      "content": "def calcular_credito(principal: float, annual_rate_pct: float, years: int) -> float:\n    \"\"\"\n    Calcula la cuota mensual de un préstamo basado en el monto principal, la tasa de interés anual y el plazo en años.\n    :param principal: Monto del préstamo\n    :param annual_rate_pct: Tasa de interés anual en porcentaje\n    :param years: Plazo del préstamo en años\n    :return: Cuota mensual a pagar\n    \"\"\"\n    monthly_rate = (annual_rate_pct / 100) / 12\n    months = years * 12\n    cuota = principal * (monthly_rate * (1 + monthly_rate) ** months) / ((1 + monthly_rate) ** months - 1)\n    return cuota\n\n"
+      "content": "from django.db import models\n\nclass Credito(models.Model):\n    monto = models.DecimalField(max_digits=10, decimal_places=2)\n    tasa_interes = models.DecimalField(max_digits=5, decimal_places=2)\n    plazo_meses = models.IntegerField()\n    fecha_creacion = models.DateTimeField(auto_now_add=True)\n\n    def __str__(self):\n        return f'Credito {self.id}: {self.monto} a {self.tasa_interes}% por {self.plazo_meses} meses'\n"
     },
-    "./tests/test_calculadora.py": {
+    "./app/views.py": {
       "operation": "modify",
-      "content": "import pytest\nfrom app.calculadora import calcular_credito\n\nclass TestCalculadora:\n    def test_calcular_credito(self):\n        # Test con valores conocidos\n        principal = 10000.0\n        annual_rate_pct = 5.0\n        years = 2\n        expected_cuota = calcular_credito(principal, annual_rate_pct, years)\n        assert expected_cuota > 0, \"La cuota debe ser mayor que 0\"\n\n    def test_invariants(self):\n        # Invariantes\n        p, r = 10000.0, 5.0\n        cuota_1y = calcular_credito(p, r, 1)\n        cuota_2y = calcular_credito(p, r, 2)\n        assert cuota_1y > cuota_2y, \"La cuota a 1 año debe ser mayor que a 2 años\"\n"
+      "content": "from rest_framework import viewsets\nfrom .models import Credito\nfrom .serializers import CreditoSerializer\n\nclass CreditoViewSet(viewsets.ModelViewSet):\n    queryset = Credito.objects.all()\n    serializer_class = CreditoSerializer\n"
+    },
+    "./app/urls.py": {
+      "operation": "modify",
+      "content": "from django.urls import path, include\nfrom rest_framework.routers import DefaultRouter\nfrom .views import CreditoViewSet\n\nrouter = DefaultRouter()\nrouter.register(r'creditos', CreditoViewSet)\n\nurlpatterns = [\n    path('', include(router.urls)),\n]\n"
+    },
+    "./tests/test_creditos.py": {
+      "operation": "modify",
+      "content": "import pytest\nfrom django.urls import reverse\nfrom rest_framework import status\nfrom rest_framework.test import APIClient\nfrom .models import Credito\n\n@pytest.mark.django_db\nclass TestCreditoAPI:\n    def setup_method(self):\n        self.client = APIClient()\n\n    def test_crear_credito(self):\n        response = self.client.post(reverse('credito-list'), {\n            'monto': 10000.00,\n            'tasa_interes': 5.0,\n            'plazo_meses': 12\n        })\n        assert response.status_code == status.HTTP_201_CREATED\n        assert Credito.objects.count() == 1\n        assert Credito.objects.get().monto == 10000.00\n"
     }
   }
 }
