@@ -1152,12 +1152,12 @@ def main() -> None:
         # ✅ deja evidencia en agent/out
     write_out(
         "agent/out/repo_snap_files.txt",
-        "\n".join(key_candidates_snap) if key_candidates_snap else "(no key candidates matched)"
+        "\n".join(key_candidates) if key_candidates else "(no key candidates matched)"
     )
     write_out(
         "agent/out/repo_snap_files_meta.json",
         json.dumps(
-            {"total_matched": len(key_candidates), "used_in_snapshot": len(key_candidates_snap), "files": key_candidates_snap},
+            {"total_matched": len(key_candidates), "used_in_snapshot": len(key_candidates), "files": key_candidates},
             ensure_ascii=False,
             indent=2,
         )
