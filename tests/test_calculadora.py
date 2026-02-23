@@ -1,7 +1,6 @@
 import pytest
 from app.calculadora import calcular_credito
 
-
 def test_calcular_credito():
     # Test con valores conocidos
     monto = 10000  # Monto del crédito
